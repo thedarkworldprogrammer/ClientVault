@@ -55,7 +55,10 @@ import {
   Moon,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ChevronRight,
+  Type,
+  Edit3
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -83,6 +86,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
   const [fileToDelete, setFileToDelete] = useState<{ id: string; name: string } | null>(null);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<boolean>(false);
   const [deletingBulk, setDeletingBulk] = useState<boolean>(false);
+  
+  // Bulk Rename State
+  const [showBulkRenameModal, setShowBulkRenameModal] = useState(false);
+  const [bulkRenameMode, setBulkRenameMode] = useState<'prefix_suffix' | 'pattern' | 'replace'>('prefix_suffix');
+  const [bulkRenamePrefix, setBulkRenamePrefix] = useState('');
+  const [bulkRenameSuffix, setBulkRenameSuffix] = useState('');
+  const [bulkRenamePattern, setBulkRenamePattern] = useState('{name}_v1');
+  const [bulkRenameFind, setBulkRenameFind] = useState('');
+  const [bulkRenameReplace, setBulkRenameReplace] = useState('');
+  const [renamingBulk, setRenamingBulk] = useState(false);
+
   const [selectedTagFilter, setSelectedTagFilter] = useState<string | null>(null);
   const [selectedUploadTags, setSelectedUploadTags] = useState<string[]>([]);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
@@ -482,10 +496,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
       }
     }
 
-    // Limit individual uploads dynamically up to 1.8MB to comply with proxy payload constraints and security guidelines
-    const MAX_SECURE_LIMIT_BYTES = 1.8 * 1024 * 1024; // 1.8MB (so that with Base64 encoding it stays safely below 2.4MB)
+    // Limit individual uploads dynamically up to 15MB now that we support client-side chunked transfers to bypass payload limits
+    const MAX_SECURE_LIMIT_BYTES = 15 * 1024 * 1024; // 15MB
     if (file.size > MAX_SECURE_LIMIT_BYTES) {
-      setUploadError(`File too large: ${formatBytes(file.size)}. Under ClientVault fortress compliance guidelines, files must be under 1.5MB (strict cap: 1.8MB) to bypass secure web proxy limitations.`);
+      setUploadError(`File too large: ${formatBytes(file.size)}. Under ClientVault fortress compliance guidelines, chunked files must be under 15MB to ensure processing compatibility.`);
       setUploading(false);
       return;
     }
@@ -500,7 +514,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
       // Track reader reading disk progress
       reader.onprogress = (e) => {
         if (e.lengthComputable) {
-          const percent = Math.round((e.loaded / e.total) * 40); // 0% - 40% for client reading
+          const percent = Math.round((e.loaded / e.total) * 30); // 0% - 30% for local parsing
           setUploadProgress(percent);
         }
       };
@@ -514,51 +528,78 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
           return;
         }
 
-        // Reader complete: set to 40%
-        setUploadProgress(40);
+        // Reader complete: set to 30%
+        setUploadProgress(30);
 
-        const newFilePayload = {
-          name: file.name,
-          size: file.size,
-          type: file.type || 'application/octet-stream',
-          ownerId: user?.uid as string,
-          content: base64Data,
-          tags: selectedUploadTags,
-        };
-
-        // Start simulated upload progress while fetch completes
-        let currentProgress = 40;
-        const progressInterval = setInterval(() => {
-          if (currentProgress < 95) {
-            currentProgress += Math.max(1, Math.round((95 - currentProgress) * 0.15));
-            setUploadProgress(currentProgress);
-          }
-        }, 150);
+        // Client-side chunk size: 512KB of base64 characters per chunk
+        const chunkSize = 512 * 1024;
+        const totalChunks = Math.ceil(base64Data.length / chunkSize);
 
         try {
-          const response = await fetch('/api/files', {
+          // 1. Initialize secure segmented upload session
+          const sessionResponse = await fetch('/api/files/upload-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newFilePayload)
+            body: JSON.stringify({
+              name: file.name,
+              size: file.size,
+              type: file.type || 'application/octet-stream',
+              ownerId: user?.uid as string,
+              tags: selectedUploadTags,
+              totalChunks,
+            }),
           });
-          
-          clearInterval(progressInterval);
 
-          if (!response.ok) {
-            let errorText = 'Backend server rejected file payload storage.';
+          if (!sessionResponse.ok) {
+            let errorText = 'Failed to initialize secure upload session.';
             try {
-              const errBody = await response.json();
+              const errBody = await sessionResponse.json();
               if (errBody && errBody.error) {
                 errorText = errBody.error;
               }
-            } catch (jsonErr) {
-              errorText = `Backend server rejected file payload storage (Status: ${response.status} ${response.statusText})`;
-            }
+            } catch (jsonErr) {}
             throw new Error(errorText);
           }
 
+          const { uploadId } = await sessionResponse.json();
+
+          // 2. Upload segments sequentially
+          for (let i = 0; i < totalChunks; i++) {
+            const startIdx = i * chunkSize;
+            const endIdx = Math.min(startIdx + chunkSize, base64Data.length);
+            const chunkData = base64Data.substring(startIdx, endIdx);
+
+            const chunkPayload = {
+              uploadId,
+              chunkIndex: i,
+              chunkData,
+            };
+
+            const chunkResponse = await fetch('/api/files/upload-chunk', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(chunkPayload),
+            });
+
+            if (!chunkResponse.ok) {
+              let errorText = `Failed to transfer segment ${i + 1} of ${totalChunks}.`;
+              try {
+                const errBody = await chunkResponse.json();
+                if (errBody && errBody.error) {
+                  errorText = errBody.error;
+                }
+              } catch (jsonErr) {}
+              throw new Error(errorText);
+            }
+
+            // Distribute remaining 70% progress over file chunks
+            const progressRangeCount = totalChunks;
+            const currentPartPercent = Math.round(30 + ((i + 1) / progressRangeCount) * 70);
+            setUploadProgress(Math.min(100, currentPartPercent));
+          }
+
           setUploadProgress(100);
-          setUploadSuccess(`"${file.name}" uploaded successfully to MongoDB Atlas!`);
+          setUploadSuccess(`"${file.name}" uploaded successfully via secure segmented transfer!`);
           fetchFiles(); // Re-fetch the list
           fetchActivities(); // Refresh activities stream
 
@@ -569,9 +610,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
             setUploadProgress(0);
           }, 1500);
         } catch (dbErr: any) {
-          clearInterval(progressInterval);
-          console.error('Upload to MongoDB Atlas failed:', dbErr);
-          setUploadError(dbErr.message || 'Failed to save document in MongoDB.');
+          console.error('Segmented transfer failed:', dbErr);
+          setUploadError(dbErr.message || 'Segmented transfer failed to save document.');
           setUploading(false);
           setUploadProgress(0);
         }
@@ -675,6 +715,90 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
       setUploadError(err.message || 'Failed to complete bulk deletion.');
     } finally {
       setDeletingBulk(false);
+    }
+  };
+
+  // Helper to construct renamed file name based on custom modes
+  const getRenamedFileName = (
+    originalName: string, 
+    index: number, 
+    mode: 'prefix_suffix' | 'pattern' | 'replace',
+    prefix: string,
+    suffix: string,
+    pattern: string,
+    findStr: string,
+    replaceStr: string
+  ) => {
+    if (!originalName) return '';
+    const dotIndex = originalName.lastIndexOf('.');
+    const baseName = dotIndex !== -1 ? originalName.substring(0, dotIndex) : originalName;
+    const extension = dotIndex !== -1 ? originalName.substring(dotIndex) : '';
+
+    let newBase = baseName;
+
+    if (mode === 'prefix_suffix') {
+      newBase = `${prefix}${baseName}${suffix}`;
+    } else if (mode === 'pattern') {
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      newBase = pattern
+        .replace(/\[Name\]/gi, baseName)
+        .replace(/\{name\}/gi, baseName)
+        .replace(/\[Index\]/gi, String(index + 1))
+        .replace(/\{index\}/gi, String(index + 1))
+        .replace(/\[Date\]/gi, today)
+        .replace(/\{date\}/gi, today);
+    } else if (mode === 'replace') {
+      if (findStr) {
+        newBase = baseName.split(findStr).join(replaceStr);
+      }
+    }
+
+    return `${newBase}${extension}`;
+  };
+
+  // Perform bulk renaming of files securely via MongoDB endpoint
+  const executeBulkRename = async () => {
+    if (selectedFileIds.length === 0) return;
+    setRenamingBulk(true);
+
+    const renamePayload = selectedFileIds.map((id, index) => {
+      const file = files.find(f => f.id === id);
+      const originalName = file ? file.name : '';
+      const newName = getRenamedFileName(
+        originalName,
+        index,
+        bulkRenameMode,
+        bulkRenamePrefix,
+        bulkRenameSuffix,
+        bulkRenamePattern,
+        bulkRenameFind,
+        bulkRenameReplace
+      );
+      return { id, newName };
+    }).filter(item => item.newName && item.id);
+
+    try {
+      const response = await fetch('/api/files/bulk-rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renames: renamePayload })
+      });
+      if (!response.ok) {
+        throw new Error('Server rejected bulk secure renaming.');
+      }
+      const data = await response.json();
+      setUploadSuccess(`Successfully batch renamed ${data.updatedCount || renamePayload.length} files securely.`);
+      setSelectedFileIds([]); // Clear selection
+      setShowBulkRenameModal(false);
+      fetchFiles(); // Refresh file list
+      fetchActivities(); // Refresh activities stream
+      setTimeout(() => setUploadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Batch renaming failed:', err);
+      setUploadError(err.message || 'Failed to complete batch rename.');
+      setTimeout(() => setUploadError(null), 4000);
+    } finally {
+      setRenamingBulk(false);
     }
   };
 
@@ -2231,6 +2355,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
 
               <button
                 type="button"
+                id="btn-bulk-rename"
+                onClick={() => setShowBulkRenameModal(true)}
+                disabled={zipping || deletingBulk}
+                className="relative bg-teal-600 hover:bg-teal-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-teal-900/30 cursor-pointer overflow-hidden group border border-teal-500"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-white" />
+                <span>Batch Rename</span>
+              </button>
+
+              <button
+                type="button"
                 id="btn-bulk-delete"
                 onClick={() => setBulkDeleteConfirm(true)}
                 disabled={zipping || deletingBulk}
@@ -2332,6 +2467,253 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>Purge All</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Modal Confirmation Dialog for Bulk File Renaming */}
+      <AnimatePresence>
+        {showBulkRenameModal && (
+          <div 
+            id="bulk-rename-modal-overlay"
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => setShowBulkRenameModal(false)}
+          >
+            <motion.div
+              id="bulk-rename-modal-content"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.35 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-lg overflow-hidden p-6 relative font-sans text-slate-800 dark:text-slate-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 bg-teal-50 dark:bg-teal-950 text-teal-600 dark:text-teal-400 border border-teal-100 dark:border-teal-900 rounded-xl flex items-center justify-center">
+                    <Edit3 className="w-4.5 h-4.5" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
+                      Batch Rename Selected Files
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                      Configure patterns to batch process {selectedFileIds.length} files
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBulkRenameModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Mode switch bar */}
+              <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-950 p-1 rounded-xl mt-4">
+                <button
+                  type="button"
+                  onClick={() => setBulkRenameMode('prefix_suffix')}
+                  className={`py-2 text-[10.5px] font-bold rounded-lg transition-all cursor-pointer ${
+                    bulkRenameMode === 'prefix_suffix'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Prefix & Suffix
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkRenameMode('pattern')}
+                  className={`py-2 text-[10.5px] font-bold rounded-lg transition-all cursor-pointer ${
+                    bulkRenameMode === 'pattern'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Custom Pattern
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkRenameMode('replace')}
+                  className={`py-2 text-[10.5px] font-bold rounded-lg transition-all cursor-pointer ${
+                    bulkRenameMode === 'replace'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  Find & Replace
+                </button>
+              </div>
+
+              {/* Dynamic Inputs Container */}
+              <div className="mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-955 border border-slate-100 dark:border-slate-800/60 min-h-[110px]">
+                {bulkRenameMode === 'prefix_suffix' && (
+                  <div className="grid grid-cols-2 gap-3.5 text-left">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wider">
+                        Prefix (prepend)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Conf_"
+                        value={bulkRenamePrefix}
+                        onChange={(e) => setBulkRenamePrefix(e.target.value)}
+                        className="w-full text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wider">
+                        Suffix (append)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. _v2"
+                        value={bulkRenameSuffix}
+                        onChange={(e) => setBulkRenameSuffix(e.target.value)}
+                        className="w-full text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {bulkRenameMode === 'pattern' && (
+                  <div className="text-left">
+                    <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wider">
+                      Rename Pattern Structure
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Archive_{index}_{date}"
+                      value={bulkRenamePattern}
+                      onChange={(e) => setBulkRenamePattern(e.target.value)}
+                      className="w-full text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                    />
+                    <div className="flex flex-wrap gap-x-2.5 gap-y-1 mt-2 text-[9.5px] text-slate-400 font-medium">
+                      <span>Placeholders:</span>
+                      <button 
+                        type="button"
+                        onClick={() => setBulkRenamePattern(prev => prev + '{name}')}
+                        className="text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                      >
+                        {"{name}"}
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setBulkRenamePattern(prev => prev + '{index}')}
+                        className="text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                      >
+                        {"{index}"}
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setBulkRenamePattern(prev => prev + '{date}')}
+                        className="text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                      >
+                        {"{date}"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {bulkRenameMode === 'replace' && (
+                  <div className="grid grid-cols-2 gap-3.5 text-left">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wider">
+                        Find Characters
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. draft"
+                        value={bulkRenameFind}
+                        onChange={(e) => setBulkRenameFind(e.target.value)}
+                        className="w-full text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 uppercase tracking-wider">
+                        Replace With
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. final"
+                        value={bulkRenameReplace}
+                        onChange={(e) => setBulkRenameReplace(e.target.value)}
+                        className="w-full text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Live Preview List */}
+              <div className="mt-4">
+                <span className="block text-[9.5px] font-bold text-slate-400 tracking-wider uppercase mb-1.5 text-left">
+                  Live Transformation Preview
+                </span>
+                <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-[143px] overflow-y-auto bg-slate-50/50 dark:bg-slate-950/20">
+                  {selectedFileIds.map((id, index) => {
+                    const file = files.find(f => f.id === id);
+                    if (!file) return null;
+                    const previewNewName = getRenamedFileName(
+                      file.name,
+                      index,
+                      bulkRenameMode,
+                      bulkRenamePrefix,
+                      bulkRenameSuffix,
+                      bulkRenamePattern,
+                      bulkRenameFind,
+                      bulkRenameReplace
+                    );
+                    return (
+                      <div key={id} className="p-2.5 flex items-center justify-between text-[11px] hover:bg-slate-100/40 dark:hover:bg-slate-900/50 transition-colors">
+                        <span className="text-slate-500 dark:text-slate-400 truncate max-w-[190px] font-medium text-left" title={file.name}>
+                          {file.name}
+                        </span>
+                        <ChevronRight className="w-3 h-3 text-slate-400 shrink-0 mx-2" />
+                        <span className="text-teal-600 dark:text-teal-400 font-bold truncate max-w-[190px] text-right" title={previewNewName || 'Unchanged'}>
+                          {previewNewName || file.name}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="grid grid-cols-2 gap-3 mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  id="btn-confirm-rename-cancel"
+                  onClick={() => setShowBulkRenameModal(false)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-150 dark:hover:bg-slate-705 text-slate-700 dark:text-slate-300 font-bold text-xs transition disabled:opacity-50 cursor-pointer text-center"
+                  disabled={renamingBulk}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="btn-confirm-rename-execute"
+                  onClick={executeBulkRename}
+                  disabled={renamingBulk}
+                  className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 dark:disabled:bg-slate-805 disabled:text-slate-550 text-white font-bold text-xs shadow-md shadow-teal-100 dark:shadow-none transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                >
+                  {renamingBulk ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Renaming...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-3.5 h-3.5 text-white" />
+                      <span>Apply Changes</span>
+                    </>
+                  )}
                 </button>
               </div>
             </motion.div>

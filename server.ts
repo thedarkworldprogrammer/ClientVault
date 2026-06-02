@@ -24,6 +24,16 @@ async function startServer() {
   const inMemoryFiles: any[] = [];
   const inMemoryActivities: any[] = [];
   const inMemoryShares: any[] = [];
+  const activeUploadSessions: Record<string, {
+    name: string;
+    size: number;
+    type: string;
+    ownerId: string;
+    tags: string[];
+    totalChunks: number;
+    chunks: Record<number, string>;
+    createdAt: number;
+  }> = {};
 
   async function getFilesCollection() {
     if (useInMemoryFallback) return null;
@@ -260,6 +270,141 @@ async function startServer() {
         }
       });
       res.json(summaryMap);
+    }
+  });
+
+  // POST: Initiate a chunked upload session
+  app.post("/api/files/upload-session", (req, res) => {
+    try {
+      const { name, size, type, ownerId, tags, totalChunks } = req.body;
+      if (!name || size === undefined || !type || !ownerId || totalChunks === undefined) {
+        return res.status(400).json({ error: "Missing required session initiation parameters." });
+      }
+
+      // Cleanup old expired sessions (>1hr old) to protect memory
+      const now = Date.now();
+      for (const [id, sess] of Object.entries(activeUploadSessions)) {
+        if (now - sess.createdAt > 3600000) {
+          delete activeUploadSessions[id];
+        }
+      }
+
+      const uploadId = "session_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
+      activeUploadSessions[uploadId] = {
+        name,
+        size: Number(size),
+        type,
+        ownerId,
+        tags: Array.isArray(tags) ? tags : [],
+        totalChunks: Number(totalChunks),
+        chunks: {},
+        createdAt: now,
+      };
+
+      res.status(201).json({ uploadId });
+    } catch (err: any) {
+      console.error("Failed to initiate upload session:", err);
+      res.status(500).json({ error: err.message || "Unable to initiate upload session." });
+    }
+  });
+
+  // POST: Receive an uploaded file chunk
+  app.post("/api/files/upload-chunk", async (req, res) => {
+    try {
+      const { uploadId, chunkIndex, chunkData } = req.body;
+      if (!uploadId || chunkIndex === undefined || chunkData === undefined) {
+        return res.status(400).json({ error: "Incomplete chunk transport parameters." });
+      }
+
+      const session = activeUploadSessions[uploadId];
+      if (!session) {
+        return res.status(410).json({ error: "Upload session has expired, been aborted, or does not exist." });
+      }
+
+      const idx = Number(chunkIndex);
+      session.chunks[idx] = chunkData;
+
+      const receivedCount = Object.keys(session.chunks).length;
+      if (receivedCount === session.totalChunks) {
+        // Complete! Assemble the parts
+        let assembledContent = "";
+        for (let i = 0; i < session.totalChunks; i++) {
+          if (session.chunks[i] === undefined) {
+            return res.status(400).json({ error: `Missing chunk at index ${i}. Upload failed.` });
+          }
+          assembledContent += session.chunks[i];
+        }
+
+        const { name, size, type, ownerId, tags } = session;
+        const collection = await getFilesCollection();
+        let insertedId: string;
+
+        if (!collection) {
+          const fileId = "mem_" + Math.random().toString(36).substring(2, 11);
+          inMemoryFiles.push({
+            id: fileId,
+            name,
+            size: Number(size),
+            type,
+            ownerId,
+            content: assembledContent,
+            uploadedAt: new Date(),
+            tags: Array.isArray(tags) ? tags : [],
+          });
+          insertedId = fileId;
+        } else {
+          try {
+            const result = await collection.insertOne({
+              name,
+              size: Number(size),
+              type,
+              ownerId,
+              content: assembledContent,
+              uploadedAt: new Date(),
+              tags: Array.isArray(tags) ? tags : [],
+            });
+            insertedId = result.insertedId.toString();
+          } catch (dbErr) {
+            console.warn("MongoDB insert error on chunk assembly, falling back to Memory Storage:", dbErr);
+            const fileId = "mem_err_" + Math.random().toString(36).substring(2, 11);
+            inMemoryFiles.push({
+              id: fileId,
+              name,
+              size: Number(size),
+              type,
+              ownerId,
+              content: assembledContent,
+              uploadedAt: new Date(),
+              tags: Array.isArray(tags) ? tags : [],
+            });
+            insertedId = fileId;
+          }
+        }
+
+        await logActivity(
+          ownerId,
+          "UPLOAD",
+          name,
+          `Uploaded file (${formatSize(Number(size))}) [Assembled from ${session.totalChunks} Chunks]` + 
+          (Array.isArray(tags) && tags.length > 0 ? ` with initial tags: ${tags.join(", ")}` : "")
+        );
+
+        // Delete session to free memory
+        delete activeUploadSessions[uploadId];
+
+        return res.status(201).json({ id: insertedId, success: true, completed: true });
+      }
+
+      // Return status for pending chunks
+      res.json({
+        success: true,
+        completed: false,
+        received: receivedCount,
+        total: session.totalChunks,
+      });
+    } catch (err: any) {
+      console.error("Chunk file storage exception:", err);
+      res.status(500).json({ error: err.message || "Failed to process transmitted file chunk." });
     }
   });
 
@@ -517,6 +662,94 @@ async function startServer() {
         }
       });
       res.json({ success: true, deletedCount });
+    }
+  });
+
+  // POST: Bulk rename files in MongoDB or in-memory fallback
+  app.post("/api/files/bulk-rename", async (req, res) => {
+    try {
+      const { renames } = req.body;
+      if (!renames || !Array.isArray(renames) || renames.length === 0) {
+        return res.status(400).json({ error: "renames array must not be empty" });
+      }
+
+      const collection = await getFilesCollection();
+      let updatedCount = 0;
+
+      for (const item of renames) {
+        const { id, newName } = item;
+        if (!id || !newName) continue;
+
+        let file: any = null;
+
+        if (!collection) {
+          // In-memory rename
+          file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            const oldName = file.name;
+            file.name = newName;
+            updatedCount++;
+            await logActivity(
+              file.ownerId,
+              "RENAME",
+              oldName,
+              `Batch renamed file to: "${newName}"`
+            );
+          }
+        } else {
+          if (id.startsWith("mem_")) {
+            file = inMemoryFiles.find(f => f.id === id);
+            if (file) {
+              const oldName = file.name;
+              file.name = newName;
+              updatedCount++;
+              await logActivity(
+                file.ownerId,
+                "RENAME",
+                oldName,
+                `Batch renamed file to: "${newName}"`
+              );
+            }
+          } else {
+            try {
+              file = await collection.findOne({ _id: new ObjectId(id) });
+              if (file) {
+                const oldName = file.name;
+                await collection.updateOne(
+                  { _id: new ObjectId(id) },
+                  { $set: { name: newName } }
+                );
+                updatedCount++;
+                await logActivity(
+                  file.ownerId,
+                  "RENAME",
+                  oldName,
+                  `Batch renamed file to: "${newName}"`
+                );
+              }
+            } catch (dbErr) {
+              console.warn("DB error on bulk rename single item, trying in-memory lookup:", dbErr);
+              file = inMemoryFiles.find(f => f.id === id);
+              if (file) {
+                const oldName = file.name;
+                file.name = newName;
+                updatedCount++;
+                await logActivity(
+                  file.ownerId,
+                  "RENAME",
+                  oldName,
+                  `Batch renamed file to: "${newName}" [In-Memory]`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      res.json({ success: true, updatedCount });
+    } catch (err: any) {
+      console.error("MongoDB bulk RENAME error:", err);
+      res.status(500).json({ error: err.message || "Failed to process bulk rename operation." });
     }
   });
 
