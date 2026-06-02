@@ -545,7 +545,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
           clearInterval(progressInterval);
 
           if (!response.ok) {
-            throw new Error('Backend server rejected file payload storage.');
+            let errorText = 'Backend server rejected file payload storage.';
+            try {
+              const errBody = await response.json();
+              if (errBody && errBody.error) {
+                errorText = errBody.error;
+              }
+            } catch (jsonErr) {
+              errorText = `Backend server rejected file payload storage (Status: ${response.status} ${response.statusText})`;
+            }
+            throw new Error(errorText);
           }
 
           setUploadProgress(100);
