@@ -26,7 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
       <div className="flex flex-col">
         <div className="p-8 border-b border-slate-800 flex items-center space-x-3">
           <div className={`p-2 rounded-lg border ${
-            isAdmin ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+            isAdmin ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
           }`}>
             <Shield className="w-6 h-6 shrink-0" />
           </div>
@@ -46,10 +46,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
             <button
               id="nav-admin"
               onClick={() => setActiveTab('admin')}
-              className="w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer bg-red-600/10 text-red-400 shadow-xs border-l-2 border-red-500"
+              className="w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer bg-emerald-600/10 text-emerald-400 shadow-xs border-l-2 border-emerald-500"
             >
-              <div className="flex items-center space-x-3 text-red-400">
-                <Shield className="w-4 h-4 shrink-0 text-red-400" />
+              <div className="flex items-center space-x-3 text-emerald-400">
+                <Shield className="w-4 h-4 shrink-0 text-emerald-400" />
                 <span className="font-bold">Admin Directory</span>
               </div>
             </button>

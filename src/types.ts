@@ -16,6 +16,16 @@ export interface ClientFile {
   uploadedAt: Date;
   ownerId: string;
   content: string; // Base64 data url
+  tags?: string[];
+}
+
+export interface ActivityLog {
+  id: string;
+  ownerId: string;
+  action: 'UPLOAD' | 'DELETE' | 'TAG_UPDATE' | 'SHARE_GENERATE';
+  fileName: string;
+  details: string;
+  timestamp: Date;
 }
 
 export enum AuthMode {

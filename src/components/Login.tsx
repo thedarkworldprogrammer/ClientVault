@@ -64,10 +64,10 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div id="login-container" className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="absolute top-4 left-4 flex items-center space-x-2 text-slate-800">
-        <Shield className="w-5 h-5 text-blue-600" />
-        <span className="font-sans font-bold text-sm tracking-tight text-slate-900">ClientVault</span>
+    <div id="login-container" className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="absolute top-4 left-4 flex items-center space-x-2 text-slate-800 dark:text-slate-300">
+        <Shield className="w-5 h-5 text-blue-600 dark:text-blue-450" />
+        <span className="font-sans font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100">ClientVault</span>
       </div>
 
       <div className="sm:mx-auto w-full max-w-md">
@@ -75,10 +75,10 @@ export const Login: React.FC = () => {
           <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-xs border border-blue-700">
             <Shield className="w-6 h-6" />
           </div>
-          <h2 className="mt-5 text-center text-3xl font-extrabold font-sans text-slate-900 tracking-tight">
+          <h2 className="mt-5 text-center text-3xl font-extrabold font-sans text-slate-900 dark:text-white tracking-tight">
             {mode === AuthMode.SIGN_IN ? 'Sign In to ClientVault' : 'Create an Account'}
           </h2>
-          <p className="mt-2 text-center text-sm text-slate-500">
+          <p className="mt-2 text-center text-sm text-slate-500 dark:text-slate-400">
             {mode === AuthMode.SIGN_IN ? (
               <>
                 New to ClientVault?{' '}
@@ -86,7 +86,7 @@ export const Login: React.FC = () => {
                   id="btn-switch-signup"
                   type="button"
                   onClick={handleModeToggle}
-                  className="font-medium text-blue-600 hover:text-blue-500 underline transition cursor-pointer"
+                  className="font-medium text-blue-600 dark:text-blue-455 hover:text-blue-500 dark:hover:text-blue-400 underline transition cursor-pointer"
                 >
                   Create an account
                 </button>
@@ -98,7 +98,7 @@ export const Login: React.FC = () => {
                   id="btn-switch-signin"
                   type="button"
                   onClick={handleModeToggle}
-                  className="font-medium text-blue-600 hover:text-blue-500 underline transition cursor-pointer"
+                  className="font-medium text-blue-600 dark:text-blue-455 hover:text-blue-500 dark:hover:text-blue-400 underline transition cursor-pointer"
                 >
                   Sign in instead
                 </button>
@@ -109,7 +109,7 @@ export const Login: React.FC = () => {
       </div>
 
       <div className="mt-8 sm:mx-auto w-full max-w-md">
-        <div className="bg-white py-8 px-4 border border-slate-200 rounded-2xl sm:px-10 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 py-8 px-4 border border-slate-200 dark:border-slate-800 rounded-2xl sm:px-10 shadow-xs">
           <form className="space-y-6" onSubmit={handleSubmit}>
             {/* Display error messages */}
             {(error || localError) && (
@@ -132,7 +132,7 @@ export const Login: React.FC = () => {
 
             {/* Email Field */}
             <div>
-              <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700">
+              <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
                 Email address
               </label>
               <div className="mt-1.5 relative rounded-md">
@@ -148,14 +148,14 @@ export const Login: React.FC = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@company.com"
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10"
+                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10 dark:bg-slate-950/30"
                 />
               </div>
             </div>
 
             {/* Password Field */}
             <div>
-              <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700">
+              <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
                 Password
               </label>
               <div className="mt-1.5 relative rounded-md">
@@ -171,7 +171,7 @@ export const Login: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Minimum 6 characters"
-                  className="block w-full pl-10 pr-10 py-2.5 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10"
+                  className="block w-full pl-10 pr-10 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10 dark:bg-slate-950/30"
                 />
                 <button
                   id="btn-toggle-password"
@@ -187,7 +187,7 @@ export const Login: React.FC = () => {
             {/* Confirm Password Field (only showing on Sign Up) */}
             {mode === AuthMode.SIGN_UP && (
               <div>
-                <label htmlFor="login-confirm-password" className="block text-sm font-semibold text-slate-700">
+                <label htmlFor="login-confirm-password" className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
                   Confirm Password
                 </label>
                 <div className="mt-1.5 relative rounded-md">
@@ -202,7 +202,7 @@ export const Login: React.FC = () => {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Verify your password"
-                    className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10"
+                    className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10 dark:bg-slate-950/30"
                   />
                 </div>
               </div>
@@ -232,9 +232,9 @@ export const Login: React.FC = () => {
           </form>
 
           {/* Sandbox Guideline Banner */}
-          <div className="mt-6 pt-5 border-t border-slate-100">
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-widest font-mono">Sandbox Quick Notice</h4>
-            <ul className="mt-2 text-[11px] text-slate-500 space-y-1 font-sans list-disc list-inside">
+          <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800">
+            <h4 className="text-xs font-bold text-slate-700 dark:text-slate-350 uppercase tracking-widest font-mono">Sandbox Quick Notice</h4>
+            <ul className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 space-y-1 font-sans list-disc list-inside">
               <li>Feel free to **self-register** to test dynamic clients.</li>
               <li>You may see a mock warning until your Firebase terms are accepted.</li>
               <li>Files must be under 2MB (Base64-backed database storage).</li>
