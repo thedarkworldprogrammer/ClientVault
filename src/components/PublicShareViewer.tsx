@@ -193,14 +193,14 @@ export const PublicShareViewer: React.FC<PublicShareViewerProps> = ({ token, onC
             <div className="aspect-video bg-slate-50 border-b border-slate-100 relative flex items-center justify-center overflow-hidden group">
               {file.type.startsWith('image/') ? (
                 <img 
-                  src={file.content} 
+                  src={file.content || undefined} 
                   alt={file.name} 
                   className="w-full h-full object-contain pointer-events-none transition group-hover:scale-[1.01]"
                   referrerPolicy="no-referrer"
                 />
               ) : file.type.startsWith('video/') ? (
                 <video 
-                  src={file.content} 
+                  src={file.content || undefined} 
                   controls 
                   className="w-full h-full object-contain"
                 />

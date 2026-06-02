@@ -1777,7 +1777,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                         )}
                       </div>
                       <iframe 
-                        src={previewUrl || ''} 
+                        src={previewUrl || undefined} 
                         className="w-full h-full border-0 bg-white" 
                         title="PDF Client Preview"
                       />
@@ -1917,7 +1917,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                     <div className="w-full h-full flex flex-col items-center justify-center relative p-4 bg-slate-950 overflow-hidden select-none">
                       <div className="flex-1 flex items-center justify-center overflow-auto w-full max-h-full">
                         <img 
-                          src={previewUrl || selectedPreviewFile.content} 
+                          src={previewUrl || selectedPreviewFile.content || undefined} 
                           alt={selectedPreviewFile.name} 
                           referrerPolicy="no-referrer"
                           className="max-w-full max-h-full object-contain rounded-lg transition-transform duration-200 ease-out shadow-2xl border border-slate-800"
@@ -1966,7 +1966,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                     </div>
                   ) : selectedPreviewFile.type.startsWith('video/') ? (
                     <video 
-                      src={previewUrl || selectedPreviewFile.content} 
+                      src={previewUrl || selectedPreviewFile.content || undefined} 
                       controls 
                       className="max-w-full max-h-full rounded-lg shadow-xl border border-slate-800"
                     />

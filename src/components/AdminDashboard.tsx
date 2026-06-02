@@ -625,14 +625,14 @@ export const AdminDashboard: React.FC = () => {
                 <div className="flex-1 flex items-center justify-center p-8 overflow-hidden">
                   {selectedPreviewFile.type.startsWith('image/') ? (
                     <img 
-                      src={selectedPreviewFile.content} 
+                      src={selectedPreviewFile.content || undefined} 
                       alt={selectedPreviewFile.name} 
                       referrerPolicy="no-referrer"
                       className="max-w-full max-h-full object-contain rounded-lg shadow-xl border border-slate-800"
                     />
                   ) : selectedPreviewFile.type.startsWith('video/') ? (
                     <video 
-                      src={selectedPreviewFile.content} 
+                      src={selectedPreviewFile.content || undefined} 
                       controls 
                       className="max-w-full max-h-full rounded-lg shadow-xl border border-slate-800"
                     />
