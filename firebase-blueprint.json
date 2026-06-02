@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email address of the user"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user registered"
+        }
+      },
+      "required": [
+        "email",
+        "createdAt"
+      ]
+    },
+    "ClientFile": {
+      "title": "ClientFile",
+      "description": "Secure file and its metadata uploaded by clients/users",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Original file name"
+        },
+        "size": {
+          "type": "integer",
+          "description": "File size in bytes"
+        },
+        "type": {
+          "type": "string",
+          "description": "MIME type of the file"
+        },
+        "uploadedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of when the file was uploaded"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns this file"
+        },
+        "content": {
+          "type": "string",
+          "description": "Base64 encoded data-URL of the uploaded file"
+        }
+      },
+      "required": [
+        "name",
+        "size",
+        "type",
+        "uploadedAt",
+        "ownerId",
+        "content"
+      ]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Collection of user-specific profile records"
+    },
+    "files/{fileId}": {
+      "schema": "ClientFile",
+      "description": "Collection of secure user files"
+    }
+  }
+}

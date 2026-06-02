@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // PILLAR 1: Global Safety Net (default deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // PILLAR 3: Global helper primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // PILLAR 2: Validation Blueprints (Strict Key & Type matching)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['email', 'createdAt']) &&
+             data.keys().size() == 2 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 256 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidClientFile(data) {
+      return data.keys().hasAll(['name', 'size', 'type', 'uploadedAt', 'ownerId', 'content']) &&
+             data.keys().size() == 6 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 512 &&
+             data.size is int && data.size >= 0 && data.size <= 2500000 &&
+             data.type is string && data.type.size() > 0 && data.type.size() <= 128 &&
+             data.uploadedAt is timestamp &&
+             data.ownerId is string && data.ownerId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 2500000;
+    }
+
+    // --- Users Profiles Collection Rules ---
+    match /users/{userId} {
+      // PILLAR 6: PII Isolation (No blanket reads, strictly owned reads)
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
+      
+      // User must be creation owner and set strict server timestamps
+      allow create: if isSignedIn() && 
+                    request.auth.uid == userId && 
+                    isValidId(userId) && 
+                    isValidUserProfile(incoming()) && 
+                    incoming().createdAt == request.time;
+                    
+      // Profile details can only modify email, while keeping createdAt immutable
+      allow update: if isSignedIn() && 
+                    request.auth.uid == userId && 
+                    isValidId(userId) && 
+                    isValidUserProfile(incoming()) && 
+                    incoming().createdAt == existing().createdAt && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['email']);
+                    
+      allow delete: if false; // Immutable account status from client-side
+    }
+
+    // --- Secure Client Files Collection Rules ---
+    match /files/{fileId} {
+      // PILLAR 8: Secure List Queries (Evaluate resource elements against authenticated user ID)
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow get: if isSignedIn() && 
+                 existing().ownerId == request.auth.uid && 
+                 isValidId(fileId);
+
+      // PILLAR 1 & 11: Master Gate Verification (Verifies owner profile exists statically beforehand)
+      allow create: if isSignedIn() &&
+                    isValidId(fileId) &&
+                    isValidClientFile(incoming()) &&
+                    incoming().uploadedAt == request.time &&
+                    incoming().ownerId == request.auth.uid &&
+                    exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      // PILLAR 4 & 12: Tiered Identity & Immortality check. Only allow renaming 'name' field
+      allow update: if isSignedIn() &&
+                    isValidId(fileId) &&
+                    isValidClientFile(incoming()) &&
+                    existing().ownerId == request.auth.uid &&
+                    incoming().ownerId == existing().ownerId &&
+                    incoming().size == existing().size &&
+                    incoming().type == existing().type &&
+                    incoming().content == existing().content &&
+                    incoming().uploadedAt == existing().uploadedAt &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name']);
+
+      allow delete: if isSignedIn() &&
+                    isValidId(fileId) &&
+                    existing().ownerId == request.auth.uid;
+    }
+  }
+}
