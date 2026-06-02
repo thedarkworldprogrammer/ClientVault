@@ -2,8 +2,6 @@
 <img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
 </div>
 
-# LIVE: https://clientvault-lb89.onrender.com/
-
 # Run and deploy your AI Studio app
 
 This contains everything you need to run your app locally.
@@ -18,6 +16,5 @@ View your app in AI Studio: https://ai.studio/apps/bcf8ad14-bc7c-409f-8820-f6b4e
 1. Install dependencies:
    `npm install`
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Set the `MONGO_URI` also
-4. Run the app:
+3. Run the app:
    `npm run dev`

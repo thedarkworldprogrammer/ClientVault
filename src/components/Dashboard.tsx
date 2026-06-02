@@ -148,6 +148,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     setSelectedFileIds(prev => prev.filter(id => existingIds.has(id)));
   }, [files]);
 
+  // Programmatically trigger the secure file upload picker from the header area
+  useEffect(() => {
+    const handleTriggerUpload = () => {
+      fileInputRef.current?.click();
+    };
+    window.addEventListener('trigger-secure-upload', handleTriggerUpload);
+    return () => {
+      window.removeEventListener('trigger-secure-upload', handleTriggerUpload);
+    };
+  }, []);
+
+  // Broadcast uploading, compressing and uploadProgress state updates to other parts of the app (e.g. Header Quick Upload)
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('secure-upload-state', {
+      detail: { uploading, compressing, uploadProgress }
+    }));
+  }, [uploading, compressing, uploadProgress]);
+
   // Dispatch public sharing link creation to the secure sharing API
   const handleGenerateShareLink = async (fileId: string) => {
     if (!user) return;
@@ -499,8 +517,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     // Limit individual uploads dynamically up to 15MB now that we support client-side chunked transfers to bypass payload limits
     const MAX_SECURE_LIMIT_BYTES = 15 * 1024 * 1024; // 15MB
     if (file.size > MAX_SECURE_LIMIT_BYTES) {
-      setUploadError(`File too large: ${formatBytes(file.size)}. Under ClientVault fortress compliance guidelines, chunked files must be under 15MB to ensure processing compatibility.`);
+      const errMsg = `File too large: ${formatBytes(file.size)}. Under ClientVault fortress compliance guidelines, chunked files must be under 15MB to ensure processing compatibility.`;
+      setUploadError(errMsg);
       setUploading(false);
+      window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+        detail: { type: 'error', message: errMsg }
+      }));
       return;
     }
 
@@ -524,7 +546,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
         if (!base64Data) {
           setUploading(false);
           setUploadProgress(0);
-          setUploadError('Could not parse file bytes.');
+          const errMsg = 'Could not parse file bytes.';
+          setUploadError(errMsg);
+          window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+            detail: { type: 'error', message: errMsg }
+          }));
           return;
         }
 
@@ -599,9 +625,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
           }
 
           setUploadProgress(100);
-          setUploadSuccess(`"${file.name}" uploaded successfully via secure segmented transfer!`);
+          const successMsg = `"${file.name}" uploaded successfully via secure segmented transfer!`;
+          setUploadSuccess(successMsg);
           fetchFiles(); // Re-fetch the list
           fetchActivities(); // Refresh activities stream
+          window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+            detail: { type: 'success', message: successMsg }
+          }));
 
           // Clear notification automatically after showing complete state
           setTimeout(() => {
@@ -611,24 +641,36 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
           }, 1500);
         } catch (dbErr: any) {
           console.error('Segmented transfer failed:', dbErr);
-          setUploadError(dbErr.message || 'Segmented transfer failed to save document.');
+          const errMsg = dbErr.message || 'Segmented transfer failed to save document.';
+          setUploadError(errMsg);
           setUploading(false);
           setUploadProgress(0);
+          window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+            detail: { type: 'error', message: errMsg }
+          }));
         }
       };
 
       reader.onerror = () => {
         setUploading(false);
         setUploadProgress(0);
-        setUploadError('File reading from local disk failed.');
+        const errMsg = 'File reading from local disk failed.';
+        setUploadError(errMsg);
+        window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+          detail: { type: 'error', message: errMsg }
+        }));
       };
 
       reader.readAsDataURL(file);
     } catch (err: any) {
       console.error('Upload operation error:', err);
-      setUploadError(err.message || 'Failed to complete file upload.');
+      const errMsg = err.message || 'Failed to complete file upload.';
+      setUploadError(errMsg);
       setUploading(false);
       setUploadProgress(0);
+      window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+        detail: { type: 'error', message: errMsg }
+      }));
     }
   };
 
@@ -956,91 +998,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
   const storagePercent = Math.min(100, Math.max(1, Math.round((totalSize / totalStorageCapacity) * 100)));
 
   return (
-    <div id="dashboard-client-panel" className="px-10 py-10 flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950">
-      <div className="w-full max-w-7xl mx-auto space-y-8">
+    <div id="dashboard-client-panel" className="px-4 sm:px-10 py-6 sm:py-10 flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950">
+      <div className="w-full max-w-7xl mx-auto space-y-6 sm:space-y-8">
         
         {/* Tab 1: All Client Files */}
         {activeTab === 'files' && (
           <>
-            {/* Real-time Central Search & Filter Dashboard Header */}
-            <div id="central-search-panel" className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
-                    <Search className="w-5 h-5 text-blue-600 dark:text-blue-500 animate-pulse" />
-                    <span>Real-Time Vault Search</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Search and filter files instantly by name, custom tags, or system mime-types
-                  </p>
-                </div>
-                
-                {/* Visual results summary */}
-                <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-150 dark:border-slate-850 self-start md:self-auto font-mono text-[11px] font-semibold text-slate-600 dark:text-slate-400">
-                  <span className="w-2 h-2 bg-emerald-500 rounded-full inline-block animate-ping mr-1"></span>
-                  <span>Matches: {filteredFiles.length} of {files.length}</span>
-                </div>
-              </div>
-
-              {/* Main Search Input */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
-                  <Search className="w-5 h-5" />
-                </div>
-                <input
-                  id="central-dashboard-search-bar"
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Type to search... E.g., 'invoice.pdf', 'Contract', 'image/png' or 'jpeg'"
-                  className="block w-full pl-11 pr-24 py-3.5 bg-slate-50/50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm font-sans transition-all shadow-inner"
-                />
-                
-                {searchQuery && (
-                  <button
-                    id="btn-clear-central-search"
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute inset-y-0 right-3 px-3 flex items-center text-xs font-semibold text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
-                  >
-                    Clear Search
-                  </button>
-                )}
-              </div>
-
-              {/* Quick Type Filter Shortcuts */}
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <span className="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-550 uppercase tracking-widest mr-1">
-                  Quick types:
-                </span>
-                {[
-                  { label: 'All Files', query: '' },
-                  { label: 'Images (PNG/JPG)', query: 'image/' },
-                  { label: 'Documents (Word/Text)', query: 'text/' },
-                  { label: 'PDF Files', query: 'pdf' },
-                  { label: 'ZIP Archives', query: 'zip' },
-                ].map((typeShortcut) => {
-                  const isActive = (typeShortcut.query === '' && searchQuery === '') || 
-                                   (typeShortcut.query !== '' && searchQuery.toLowerCase().includes(typeShortcut.query.toLowerCase()));
-                  return (
-                    <button
-                      key={typeShortcut.label}
-                      id={`btn-search-shortcut-${typeShortcut.label.replace(/\s+/g, '-')}`}
-                      type="button"
-                      onClick={() => setSearchQuery(typeShortcut.query)}
-                      className={`text-[11px] font-bold px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-blue-600 text-white border-blue-700 shadow-md shadow-blue-100 dark:shadow-none'
-                          : 'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-200'
-                      }`}
-                    >
-                      {typeShortcut.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Upper Stats bar */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800">
