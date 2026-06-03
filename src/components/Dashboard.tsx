@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import JSZip from 'jszip';
 import { 
@@ -33,11 +33,15 @@ import {
   Download, 
   Clock, 
   Database,
+  Music,
+  FileSpreadsheet,
   BarChart3,
   CheckCircle,
   AlertTriangle,
   Loader2,
   FolderOpen,
+  Folder,
+  FolderPlus,
   Settings,
   X,
   Eye,
@@ -69,9 +73,19 @@ interface DashboardProps {
   setFiles: (files: ClientFile[]) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
+  currentFolder?: string | null;
+  navigateToFolder?: (folderPath: string | null) => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles, theme, setTheme }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ 
+  activeTab, 
+  files, 
+  setFiles, 
+  theme, 
+  setTheme,
+  currentFolder = null,
+  navigateToFolder = (folderPath: string | null) => {}
+}) => {
   const { user, profile } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [dragActive, setDragActive] = useState(false);
@@ -99,6 +113,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
   const [bulkRenameReplace, setBulkRenameReplace] = useState('');
   const [renamingBulk, setRenamingBulk] = useState(false);
 
+  // Bulk Move State
+  const [showBulkMoveModal, setShowBulkMoveModal] = useState(false);
+  const [customMoveFolder, setCustomMoveFolder] = useState('');
+  const [selectedFolderToMove, setSelectedFolderToMove] = useState<string | null>(null);
+  const [movingBulk, setMovingBulk] = useState(false);
+
   const [selectedTagFilter, setSelectedTagFilter] = useState<string | null>(null);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [loadingActivities, setLoadingActivities] = useState<boolean>(false);
@@ -106,6 +126,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
   const [generatedShareLink, setGeneratedShareLink] = useState<string | null>(null);
   const [generatingShareLink, setGeneratingShareLink] = useState<boolean>(false);
   const [copySuccess, setCopySuccess] = useState<boolean>(false);
+  
+  // Pre-upload Preview Modal State
+  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [pendingUploadPreviewUrl, setPendingUploadPreviewUrl] = useState<string | null>(null);
+  const [pendingFileTags, setPendingFileTags] = useState<string[]>([]);
+  const [isPreUploadPreviewOpen, setIsPreUploadPreviewOpen] = useState(false);
+  const [pendingUploadFileName, setPendingUploadFileName] = useState('');
   
   // Sorting State
   const [sortField, setSortField] = useState<'name' | 'size' | 'uploadedAt'>('uploadedAt');
@@ -493,6 +520,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     }
   };
 
+  const initiatePreUploadPreview = (file: File) => {
+    setPendingUploadFile(file);
+    setPendingUploadFileName(file.name);
+    if (file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      setPendingUploadPreviewUrl(url);
+    } else {
+      setPendingUploadPreviewUrl(null);
+    }
+    setPendingFileTags([]);
+    setIsPreUploadPreviewOpen(true);
+  };
+
+  const handleCancelPendingUpload = () => {
+    if (pendingUploadPreviewUrl) {
+      URL.revokeObjectURL(pendingUploadPreviewUrl);
+    }
+    setPendingUploadFile(null);
+    setPendingUploadPreviewUrl(null);
+    setPendingFileTags([]);
+    setPendingUploadFileName('');
+    setIsPreUploadPreviewOpen(false);
+  };
+
   // Fetch files from MongoDB database via server API
   const fetchFiles = async () => {
     if (!user) return;
@@ -679,12 +730,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: file.name,
+              name: pendingUploadFileName || file.name,
               size: file.size,
               type: file.type || 'application/octet-stream',
               ownerId: user?.uid as string,
-              tags: [],
+              tags: [...pendingFileTags],
               totalChunks,
+              folder: currentFolder,
             }),
           });
 
@@ -737,13 +789,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
           }
 
           setUploadProgress(100);
-          const successMsg = `"${file.name}" uploaded successfully via secure segmented transfer!`;
+          const successMsg = `"${pendingUploadFileName || file.name}" uploaded successfully via secure segmented transfer!`;
           setUploadSuccess(successMsg);
           fetchFiles(); // Re-fetch the list
           fetchActivities(); // Refresh activities stream
           window.dispatchEvent(new CustomEvent('secure-upload-notification', {
             detail: { type: 'success', message: successMsg }
           }));
+
+          // Clear pre-upload pending states
+          if (pendingUploadPreviewUrl) {
+            URL.revokeObjectURL(pendingUploadPreviewUrl);
+          }
+          setPendingUploadFile(null);
+          setPendingUploadPreviewUrl(null);
+          setPendingFileTags([]);
+          setPendingUploadFileName('');
+          setIsPreUploadPreviewOpen(false);
 
           // Clear notification automatically after showing complete state
           setTimeout(() => {
@@ -803,13 +865,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     setDragActive(false);
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processUpload(e.dataTransfer.files[0]);
+      initiatePreUploadPreview(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      processUpload(e.target.files[0]);
+      initiatePreUploadPreview(e.target.files[0]);
     }
   };
 
@@ -956,6 +1018,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     }
   };
 
+  // Perform bulk moving of files securely via MongoDB bulk-move endpoint
+  const executeBulkMove = async (targetFolder: string | null) => {
+    if (selectedFileIds.length === 0) return;
+    setMovingBulk(true);
+
+    try {
+      const response = await fetch('/api/files/bulk-move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ids: selectedFileIds,
+          targetFolder: targetFolder
+        })
+      });
+      if (!response.ok) {
+        throw new Error('Server rejected bulk folder relocation.');
+      }
+      const data = await response.json();
+      setUploadSuccess(`Successfully moved ${data.updatedCount || selectedFileIds.length} assets to folder "${targetFolder || "Root (All Client Files)"}" securely.`);
+      setSelectedFileIds([]); // Clear selection
+      setShowBulkMoveModal(false);
+      fetchFiles(); // Refresh file list
+      fetchActivities(); // Refresh activities stream
+      setTimeout(() => setUploadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Batch moving failed:', err);
+      setUploadError(err.message || 'Failed to complete folder relocation.');
+      setTimeout(() => setUploadError(null), 4000);
+    } finally {
+      setMovingBulk(false);
+    }
+  };
+
   // Update file tags securely via MongoDB API
   const handleUpdateFileTags = async (fileId: string, updatedTags: string[]) => {
     try {
@@ -1063,31 +1158,209 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
     }
   };
 
-  // Icon switcher depending on mime type (Lucide icons only)
-  const getFileIcon = (mime: string) => {
-    const isImage = mime.startsWith('image/');
-    const isVideo = mime.startsWith('video/');
-    const isPdf = mime.includes('pdf');
-    const isDoc = mime.includes('document') || mime.includes('word') || mime.includes('text');
-    const isArchive = mime.includes('zip') || mime.includes('tar') || mime.includes('compressed');
+  // Helper to retrieve color coding and properties for a given file type
+  const getFileTypeConfig = (mimeStr: string, fileName?: string) => {
+    const mime = (mimeStr || '').toLowerCase();
+    const name = (fileName || '').toLowerCase();
 
-    if (isImage) return <Image className="w-5 h-5 text-emerald-500" />;
-    if (isVideo) return <Video className="w-5 h-5 text-rose-500" />;
-    if (isPdf) return <FileText className="w-5 h-5 text-red-500" />;
-    if (isDoc) return <FileText className="w-5 h-5 text-blue-500" />;
-    if (isArchive) return <Archive className="w-5 h-5 text-amber-500" />;
-    return <File className="w-5 h-5 text-slate-400" />;
+    const isImage = mime.startsWith('image/') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif') || name.endsWith('.webp') || name.endsWith('.svg') || name.endsWith('.heic') || name.endsWith('.heif');
+    const isVideo = mime.startsWith('video/') || name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.avi') || name.endsWith('.mkv') || name.endsWith('.webm');
+    const isAudio = mime.startsWith('audio/') || name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg') || name.endsWith('.m4a') || name.endsWith('.flac');
+    const isPdf = mime.includes('pdf') || name.endsWith('.pdf');
+    const isArchive = mime.includes('zip') || mime.includes('tar') || mime.includes('compressed') || mime.includes('rar') || mime.includes('7z') || mime.includes('gzip') || name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z') || name.endsWith('.tar.gz') || name.endsWith('.gz');
+    const isCode = mime.startsWith('text/html') || mime.startsWith('text/javascript') || mime.includes('json') || mime.includes('xml') || mime.includes('code') || mime.includes('css') || name.endsWith('.html') || name.endsWith('.js') || name.endsWith('.ts') || name.endsWith('.tsx') || name.endsWith('.jsx') || name.endsWith('.css') || name.endsWith('.json') || name.endsWith('.py') || name.endsWith('.sh') || name.endsWith('.rs') || name.endsWith('.go') || name.endsWith('.java') || name.endsWith('.cpp') || name.endsWith('.yaml') || name.endsWith('.yml');
+    const isSpreadsheet = mime.includes('sheet') || mime.includes('excel') || mime.includes('csv') || name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv') || name.endsWith('.ods');
+    const isDoc = mime.includes('document') || mime.includes('word') || mime.includes('text/plain') || name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.rtf') || name.endsWith('.txt') || name.endsWith('.odt');
+
+    if (isImage) {
+      return {
+        icon: <Image className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />,
+        iconSm: <Image className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />,
+        iconLg: <Image className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
+        bgColor: 'bg-emerald-50 dark:bg-emerald-950/20',
+        bgClass: 'bg-emerald-50 dark:bg-emerald-950/20',
+        borderColor: 'border-emerald-100/70 dark:border-emerald-900/40',
+        textColor: 'text-emerald-600 dark:text-emerald-400',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-900/30 dark:text-emerald-400',
+        hoverBgClass: 'group-hover:bg-emerald-500/10 group-hover:border-emerald-500/30',
+        label: 'Image Asset',
+        shorthand: 'IMG'
+      };
+    }
+    if (isVideo) {
+      return {
+        icon: <Video className="w-4 h-4 text-rose-600 dark:text-rose-400" />,
+        iconSm: <Video className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />,
+        iconLg: <Video className="w-6 h-6 text-rose-600 dark:text-rose-400" />,
+        bgColor: 'bg-rose-50 dark:bg-rose-950/20',
+        bgClass: 'bg-rose-50 dark:bg-rose-950/20',
+        borderColor: 'border-rose-100/70 dark:border-rose-900/40',
+        textColor: 'text-rose-600 dark:text-rose-400',
+        badgeClass: 'bg-rose-100 text-rose-850 border-rose-200 dark:bg-rose-950/40 dark:border-rose-900/30 dark:text-rose-400',
+        hoverBgClass: 'group-hover:bg-rose-500/10 group-hover:border-rose-500/30',
+        label: 'Video Media',
+        shorthand: 'MP4'
+      };
+    }
+    if (isAudio) {
+      return {
+        icon: <Music className="w-4 h-4 text-fuchsia-600 dark:text-fuchsia-400" />,
+        iconSm: <Music className="w-3.5 h-3.5 text-fuchsia-600 dark:text-fuchsia-400" />,
+        iconLg: <Music className="w-6 h-6 text-fuchsia-600 dark:text-fuchsia-400" />,
+        bgColor: 'bg-fuchsia-50 dark:bg-fuchsia-950/20',
+        bgClass: 'bg-fuchsia-50 dark:bg-fuchsia-950/20',
+        borderColor: 'border-fuchsia-100/70 dark:border-fuchsia-900/40',
+        textColor: 'text-fuchsia-600 dark:text-fuchsia-400',
+        badgeClass: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200 dark:bg-fuchsia-950/40 dark:border-fuchsia-900/30 dark:text-fuchsia-400',
+        hoverBgClass: 'group-hover:bg-fuchsia-500/10 group-hover:border-fuchsia-500/30',
+        label: 'Audio Media',
+        shorthand: 'MP3'
+      };
+    }
+    if (isPdf) {
+      return {
+        icon: <FileText className="w-4 h-4 text-red-600 dark:text-red-400" />,
+        iconSm: <FileText className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />,
+        iconLg: <FileText className="w-6 h-6 text-red-600 dark:text-red-400" />,
+        bgColor: 'bg-red-50 dark:bg-red-950/20',
+        bgClass: 'bg-red-50 dark:bg-red-950/20',
+        borderColor: 'border-red-100/70 dark:border-red-900/40',
+        textColor: 'text-red-600 dark:text-red-400',
+        badgeClass: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950/40 dark:border-red-900/30 dark:text-red-400',
+        hoverBgClass: 'group-hover:bg-red-500/10 group-hover:border-red-500/30',
+        label: 'PDF Document',
+        shorthand: 'PDF'
+      };
+    }
+    if (isArchive) {
+      return {
+        icon: <Archive className="w-4 h-4 text-amber-600 dark:text-amber-400" />,
+        iconSm: <Archive className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />,
+        iconLg: <Archive className="w-6 h-6 text-amber-600 dark:text-amber-400" />,
+        bgColor: 'bg-amber-50 dark:bg-amber-950/20',
+        bgClass: 'bg-amber-50 dark:bg-amber-950/20',
+        borderColor: 'border-amber-100/70 dark:border-amber-900/40',
+        textColor: 'text-amber-600 dark:text-amber-400',
+        badgeClass: 'bg-amber-100 text-amber-850 border-amber-200 dark:bg-amber-950/40 dark:border-amber-900/30 dark:text-amber-400',
+        hoverBgClass: 'group-hover:bg-amber-500/10 group-hover:border-amber-500/30',
+        label: 'Archive Package',
+        shorthand: 'ZIP'
+      };
+    }
+    if (isCode) {
+      return {
+        icon: <FileCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />,
+        iconSm: <FileCode className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />,
+        iconLg: <FileCode className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />,
+        bgColor: 'bg-indigo-50 dark:bg-indigo-950/20',
+        bgClass: 'bg-indigo-50 dark:bg-indigo-950/20',
+        borderColor: 'border-indigo-100/70 dark:border-indigo-900/40',
+        textColor: 'text-indigo-600 dark:text-indigo-400',
+        badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-950/40 dark:border-indigo-900/30 dark:text-indigo-400',
+        hoverBgClass: 'group-hover:bg-indigo-500/10 group-hover:border-indigo-500/30',
+        label: 'Code Script',
+        shorthand: 'CODE'
+      };
+    }
+    if (isSpreadsheet) {
+      return {
+        icon: <FileSpreadsheet className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />,
+        iconSm: <FileSpreadsheet className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />,
+        iconLg: <FileSpreadsheet className="w-6 h-6 text-cyan-600 dark:text-cyan-400" />,
+        bgColor: 'bg-cyan-50 dark:bg-cyan-950/20',
+        bgClass: 'bg-cyan-50 dark:bg-cyan-950/20',
+        borderColor: 'border-cyan-100/70 dark:border-cyan-900/40',
+        textColor: 'text-cyan-600 dark:text-cyan-400',
+        badgeClass: 'bg-cyan-100 text-cyan-800 border-cyan-200 dark:bg-cyan-950/40 dark:border-cyan-900/30 dark:text-cyan-400',
+        hoverBgClass: 'group-hover:bg-cyan-500/10 group-hover:border-cyan-500/30',
+        label: 'Data Sheet',
+        shorthand: 'XLS'
+      };
+    }
+    if (isDoc) {
+      return {
+        icon: <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />,
+        iconSm: <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />,
+        iconLg: <FileText className="w-6 h-6 text-blue-600 dark:text-blue-400" />,
+        bgColor: 'bg-blue-50 dark:bg-blue-950/20',
+        bgClass: 'bg-blue-50 dark:bg-blue-950/20',
+        borderColor: 'border-blue-100/70 dark:border-blue-900/40',
+        textColor: 'text-blue-600 dark:text-blue-400',
+        badgeClass: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/40 dark:border-blue-900/30 dark:text-blue-400',
+        hoverBgClass: 'group-hover:bg-blue-500/10 group-hover:border-blue-500/30',
+        label: 'Text Document',
+        shorthand: 'DOC'
+      };
+    }
+
+    return {
+      icon: <File className="w-4 h-4 text-slate-500 dark:text-slate-400" />,
+      iconSm: <File className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />,
+      iconLg: <File className="w-6 h-6 text-slate-500 dark:text-slate-400" />,
+      bgColor: 'bg-slate-50 dark:bg-slate-900',
+      bgClass: 'bg-slate-50 dark:bg-slate-900',
+      borderColor: 'border-slate-200/60 dark:border-slate-800',
+      textColor: 'text-slate-600 dark:text-slate-400',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-350',
+      hoverBgClass: 'group-hover:bg-slate-500/10 group-hover:border-slate-500/30',
+      label: 'Generic File',
+      shorthand: 'FILE'
+    };
+  };
+
+  // Icon switcher depending on mime type (Lucide icons only)
+  const getFileIcon = (mime: string, name?: string) => {
+    return getFileTypeConfig(mime, name).icon;
+  };
+
+  // Get all virtual folders that exist in the current directory level
+  const virtualFolders = useMemo(() => {
+    const folderSet = new Set<string>();
+    
+    files.forEach(file => {
+      const f = file.folder || '';
+      if (!f) return;
+      
+      if (currentFolder === null) {
+        // At root, take the first segment
+        const segment = f.split('/')[0];
+        folderSet.add(segment);
+      } else {
+        // Inside currentFolder, check if f starts with `currentFolder/`
+        const prefix = currentFolder + '/';
+        if (f.startsWith(prefix)) {
+          const suffix = f.substring(prefix.length);
+          const segment = suffix.split('/')[0];
+          folderSet.add(segment);
+        }
+      }
+    });
+    
+    return Array.from(folderSet).sort((a, b) => a.localeCompare(b));
+  }, [files, currentFolder]);
+
+  // Helper stats for a directory
+  const getFolderStats = (folderName: string) => {
+    const fullPath = currentFolder ? `${currentFolder}/${folderName}` : folderName;
+    const folderFiles = files.filter(f => f.folder === fullPath || (f.folder && f.folder.startsWith(fullPath + '/')));
+    const count = folderFiles.length;
+    const totalSize = folderFiles.reduce((acc, f) => acc + f.size, 0);
+    return { count, totalSize };
   };
 
   // Filter list records
   const filteredFiles = files.filter(file => {
+    const hasSearchQuery = searchQuery.trim() !== '';
+    const fileFolder = file.folder || null;
+    const matchesFolder = hasSearchQuery || (fileFolder === currentFolder);
+
     const q = searchQuery.toLowerCase().trim();
     const matchesSearch = !q || 
       file.name.toLowerCase().includes(q) ||
       (file.type && file.type.toLowerCase().includes(q)) ||
       (file.tags && file.tags.some(tag => tag.toLowerCase().includes(q)));
     const matchesTag = !selectedTagFilter || (file.tags && file.tags.includes(selectedTagFilter));
-    return matchesSearch && matchesTag;
+    return matchesFolder && matchesSearch && matchesTag;
   });
 
   // Sort files based on sort state
@@ -1175,7 +1448,58 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   className="hidden"
                 />
 
-                {uploading ? (
+                {pendingUploadFile ? (
+                  <div 
+                    id="pending-file-preview-card"
+                    className="flex flex-col items-center space-y-4 py-4 w-full max-w-md mx-auto" 
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent opening native file picker
+                      setIsPreUploadPreviewOpen(true);
+                    }}
+                  >
+                    {(() => {
+                      const typeConfig = getFileTypeConfig(pendingUploadFile.type, pendingUploadFileName || pendingUploadFile.name);
+                      return (
+                        <div className={`w-16 h-16 ${typeConfig.bgColor} border ${typeConfig.borderColor} rounded-2xl shadow-xs flex items-center justify-center hover:scale-105 transition-all`}>
+                          {typeConfig.iconLg}
+                        </div>
+                      );
+                    })()}
+                    <div className="text-center space-y-1">
+                      <p className="text-sm font-bold text-slate-850 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                        Selected: <span className="underline break-all font-mono">{pendingUploadFileName || pendingUploadFile.name}</span>
+                      </p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 block">
+                        Size: <span className="font-mono font-bold text-slate-600 dark:text-slate-300">{formatBytes(pendingUploadFile.size)}</span>
+                      </p>
+                      <p className="text-[11px] font-bold text-blue-600 dark:text-blue-400 font-mono tracking-wider animate-pulse pt-2 flex items-center justify-center space-x-1.5">
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>CLICK TO PREVIEW & CONFIGURE SECURITY</span>
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2.5 w-full max-w-xs pt-1" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        id="confirm-pending-upload-direct-btn"
+                        onClick={() => processUpload(pendingUploadFile)}
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 shadow-sm cursor-pointer hover:shadow-md active:scale-95 duration-150"
+                      >
+                        <UploadCloud className="w-4 h-4" />
+                        <span>Confirm Upload</span>
+                      </button>
+                      <button
+                        type="button"
+                        id="cancel-pending-upload-clear-btn"
+                        onClick={handleCancelPendingUpload}
+                        className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-350 px-3.5 py-2.5 rounded-xl font-bold text-xs transition-colors flex items-center justify-center cursor-pointer active:scale-95 duration-150"
+                        title="Cancel selection"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : uploading ? (
                   <div className="flex flex-col items-center space-y-4 py-4 w-full max-w-md mx-auto" onClick={(e) => e.stopPropagation()}>
                     <div className="p-3 bg-blue-50/80 border border-blue-100 rounded-2xl relative flex items-center justify-center shadow-xs">
                       <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
@@ -1270,9 +1594,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
 
                         {/* Top Meta Line with Icon & Action */}
                         <div className="flex items-start justify-between">
-                          <div className="w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200/40 dark:border-slate-800/80 flex items-center justify-center shrink-0 shadow-xs group-hover:bg-blue-50/50 dark:group-hover:bg-blue-950/20 group-hover:border-blue-200 dark:group-hover:border-blue-900 transition-colors duration-300">
-                            {getFileIcon(file.type)}
-                          </div>
+                          {(() => {
+                            const typeConfig = getFileTypeConfig(file.type, file.name);
+                            return (
+                              <div className={`w-9 h-9 rounded-xl ${typeConfig.bgColor} border ${typeConfig.borderColor} flex items-center justify-center shrink-0 shadow-xs transition-colors duration-300`}>
+                                {typeConfig.icon}
+                              </div>
+                            );
+                          })()}
 
                           <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -1304,9 +1633,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                           >
                             {file.name}
                           </h4>
-                          <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500 block mt-1 font-bold">
-                            {formatBytes(file.size)}
-                          </span>
+                          <div className="flex items-center space-x-1.5 mt-1">
+                            <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500 font-bold">
+                              {formatBytes(file.size)}
+                            </span>
+                            {(() => {
+                              const typeConfig = getFileTypeConfig(file.type, file.name);
+                              return (
+                                <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold font-mono uppercase tracking-wider ${typeConfig.badgeClass}`}>
+                                  {typeConfig.shorthand}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
 
                         {/* Bottom line: Actual date and relative helper */}
@@ -1418,8 +1757,67 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   })}
               </div>
 
+              {/* Directory Breadcrumbs Navigator */}
+              <div id="directory-breadcrumbs-bar" className="px-6 py-3 bg-slate-50/55 dark:bg-slate-950/30 border-b border-slate-100/80 dark:border-slate-800/60 flex items-center justify-between text-xs font-semibold">
+                <div className="flex items-center space-x-2 truncate">
+                  <button
+                    type="button"
+                    onClick={() => navigateToFolder(null)}
+                    className="flex items-center space-x-1.5 text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-500 transition cursor-pointer bg-transparent border-0 font-bold"
+                    title="Navigate to root file vault"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>Vault Root</span>
+                  </button>
+
+                  {currentFolder && (
+                    <>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700" />
+                      {currentFolder.split('/').map((segment, index, arr) => {
+                        const pathUpToSegment = arr.slice(0, index + 1).join('/');
+                        const isLast = index === arr.length - 1;
+                        return (
+                          <React.Fragment key={pathUpToSegment}>
+                            {index > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700" />}
+                            <button
+                              type="button"
+                              onClick={() => navigateToFolder(pathUpToSegment)}
+                              disabled={isLast}
+                              className={`truncate max-w-[120px] transition cursor-pointer bg-transparent border-0 ${
+                                isLast
+                                  ? 'text-slate-700 dark:text-slate-200 font-extrabold cursor-default'
+                                  : 'text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-500 font-bold'
+                              }`}
+                            >
+                              {segment}
+                            </button>
+                          </React.Fragment>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+
+                {currentFolder && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const segments = currentFolder.split('/');
+                      if (segments.length === 1) {
+                        navigateToFolder(null);
+                      } else {
+                        navigateToFolder(segments.slice(0, -1).join('/'));
+                      }
+                    }}
+                    className="flex items-center space-x-1 text-[10.5px] font-black text-slate-600 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-500 bg-slate-150 hover:bg-slate-200/65 dark:bg-slate-800 dark:hover:bg-slate-705 px-2.5 py-1 rounded-md transition cursor-pointer"
+                  >
+                    <span>← Go Up</span>
+                  </button>
+                )}
+              </div>
+
               {/* Table list */}
-              {sortedFiles.length > 0 ? (
+              {sortedFiles.length > 0 || (searchQuery.trim() === '' && virtualFolders.length > 0) ? (
                 <div className="overflow-x-auto min-h-48">
                   <table className="w-full text-left">
                     <thead>
@@ -1496,6 +1894,60 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                       </tr>
                     </thead>
                     <tbody className="text-sm text-slate-600 dark:text-slate-350 divide-y divide-slate-50 dark:divide-slate-800">
+                      {/* Virtual Folders rendering at current directory depth */}
+                      {searchQuery.trim() === '' && virtualFolders.map((folderName) => {
+                        const { count, totalSize } = getFolderStats(folderName);
+                        const folderPath = currentFolder ? `${currentFolder}/${folderName}` : folderName;
+                        return (
+                          <tr 
+                            key={`folder-${folderName}`}
+                            id={`folder-row-${folderName}`}
+                            className="bg-slate-50/30 dark:bg-slate-900/10 hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                            onClick={() => navigateToFolder(folderPath)}
+                            title={`Click to navigate into folder: ${folderName}`}
+                          >
+                            <td className="pl-6 pr-2 py-4 w-12" onClick={(e) => e.stopPropagation()}>
+                              <div className="w-4 h-4 rounded border border-slate-200/50 dark:border-slate-800 flex items-center justify-center bg-slate-100 dark:bg-slate-950 text-slate-400 dark:text-slate-600 pointer-events-none select-none">
+                                <Folder className="w-2.5 h-2.5" />
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 flex items-center font-bold text-slate-850">
+                              <div className="flex items-center space-x-3 max-w-sm sm:max-w-md">
+                                <div className="w-8.5 h-8.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 flex items-center justify-center shrink-0 shadow-3xs group-hover:bg-amber-500/10 group-hover:border-amber-500/30 transition-all">
+                                  <Folder className="w-4 h-4 text-amber-500 dark:text-amber-400 fill-amber-500/10" />
+                                </div>
+                                <span className="truncate text-slate-700 dark:text-slate-250 font-bold group-hover:text-amber-600 dark:group-hover:text-amber-400 transition" title={folderName}>
+                                  {folderName}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 font-mono text-slate-400 text-xs">
+                              {count > 0 ? formatBytes(totalSize) : '0 Bytes'}
+                            </td>
+                            <td className="px-6 py-4 text-slate-500 dark:text-slate-400 hidden md:table-cell max-w-xs truncate">
+                              <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-md border border-amber-200/40 dark:border-amber-900/30 font-mono">
+                                Folder ({count} {count === 1 ? 'item' : 'items'})
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 hidden sm:table-cell">
+                              <span className="text-[10px] text-slate-350 dark:text-slate-600 italic">Dynamic Directory</span>
+                            </td>
+                            <td className="px-6 py-4 text-slate-400 text-xs">
+                              <span className="text-slate-350 dark:text-slate-700 font-mono">—</span>
+                            </td>
+                            <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => navigateToFolder(folderPath)}
+                                className="p-1 px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-705 rounded-md transition"
+                              >
+                                View folder
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
                       {sortedFiles.map((file) => (
                         <tr 
                           key={file.id} 
@@ -1520,9 +1972,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                           </td>
                           <td className="px-4 py-4 flex items-center font-medium text-slate-800">
                             <div className="flex items-center space-x-3 max-w-sm sm:max-w-md">
-                              <div className="w-8 h-8 rounded bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200/40 group-hover:bg-white group-hover:border-blue-200 transition">
-                                {getFileIcon(file.type)}
-                              </div>
+                              {(() => {
+                                const typeConfig = getFileTypeConfig(file.type, file.name);
+                                return (
+                                  <div className={`w-8.5 h-8.5 rounded-xl flex items-center justify-center shrink-0 border transition-all ${typeConfig.bgColor} ${typeConfig.borderColor}`}>
+                                    {typeConfig.icon}
+                                  </div>
+                                );
+                              })()}
                               <span className="truncate text-slate-700 font-bold group-hover:text-blue-700 transition" title={file.name}>
                                 {file.name}
                               </span>
@@ -2270,11 +2727,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   ) : (
                     /* Default Icon stage for archives/other secure blobs */
                     <div className="flex flex-col items-center justify-center p-12 text-center text-slate-400 space-y-4">
-                      <div className="w-20 h-20 rounded-2xl bg-slate-900 border border-slate-800/80 flex items-center justify-center text-slate-300 shadow-inner">
-                        {getFileIcon(selectedPreviewFile.type)}
-                      </div>
+                      {(() => {
+                        const typeConfig = getFileTypeConfig(selectedPreviewFile.type, selectedPreviewFile.name);
+                        return (
+                          <div className={`w-20 h-20 rounded-2xl ${typeConfig.bgColor} border ${typeConfig.borderColor} flex items-center justify-center shadow-inner`}>
+                            {typeConfig.iconLg}
+                          </div>
+                        );
+                      })()}
                       <div>
-                        <p className="text-sm font-bold text-slate-200">No Render Output</p>
+                        <p className="text-sm font-bold text-slate-250 dark:text-slate-100">No Render Output</p>
                         <p className="text-[11px] text-slate-500 mt-1 max-w-xs font-sans">
                           A direct thumbnail is unavailable for this content type. Use the buttons to inspect and download.
                         </p>
@@ -2294,12 +2756,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                       {selectedPreviewFile.name}
                     </h3>
                     <div className="flex flex-wrap gap-1.5 items-center mt-2">
-                      <span className="bg-slate-200/60 text-slate-700 text-[10px] px-2 py-0.5 rounded-md font-mono font-bold">
+                      <span className="bg-slate-200/60 text-slate-700 text-[10px] px-2 py-0.5 rounded-md font-mono font-bold font-sans">
                         {formatBytes(selectedPreviewFile.size)}
                       </span>
-                      <span className="bg-blue-50 text-blue-750 text-[10px] border border-blue-100 px-2 py-0.5 rounded-md font-mono truncate" title={selectedPreviewFile.type}>
-                        {selectedPreviewFile.type.split('/')[1] || 'Unknown'}
-                      </span>
+                      {(() => {
+                        const typeConfig = getFileTypeConfig(selectedPreviewFile.type, selectedPreviewFile.name);
+                        return (
+                          <span className={`text-[10px] border px-2 py-0.5 rounded-md font-mono truncate ${typeConfig.badgeClass || 'bg-blue-50 text-blue-750 border-blue-100'}`} title={selectedPreviewFile.type}>
+                            {typeConfig.label} ({typeConfig.shorthand})
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -2640,6 +3107,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                 disabled={zipping || deletingBulk}
               >
                 Cancel
+              </button>
+
+              <button
+                type="button"
+                id="btn-bulk-move"
+                onClick={() => {
+                  setSelectedFolderToMove(null);
+                  setCustomMoveFolder('');
+                  setShowBulkMoveModal(true);
+                }}
+                disabled={zipping || deletingBulk}
+                className="relative bg-amber-600 hover:bg-amber-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-amber-900/30 cursor-pointer overflow-hidden group border border-amber-500"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-white" />
+                <span>Move to Folder</span>
               </button>
 
               <button
@@ -3005,6 +3487,367 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   )}
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Modal Confirmation Dialog for Bulk File Relocation */}
+      <AnimatePresence>
+        {showBulkMoveModal && (
+          <div 
+            id="bulk-move-modal-overlay"
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => setShowBulkMoveModal(false)}
+          >
+            <motion.div
+              id="bulk-move-modal-content"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.35 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-md overflow-hidden p-6 relative font-sans text-slate-800 dark:text-slate-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40 rounded-xl flex items-center justify-center">
+                    <FolderOpen className="w-4.5 h-4.5" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
+                      Relocate Selected Assets
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                      Move {selectedFileIds.length} files to another directory level
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBulkMoveModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Unique directory options list */}
+              <div className="mt-4">
+                <span className="block text-[9.5px] font-bold text-slate-400 tracking-wider uppercase mb-1.5 text-left">
+                  Choose Destination Folder
+                </span>
+                <div className="space-y-2 max-h-[160px] overflow-y-auto border border-slate-100 dark:border-slate-800 p-2.5 rounded-xl bg-slate-50/50 dark:bg-slate-950/20">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFolderToMove('');
+                      setCustomMoveFolder('');
+                    }}
+                    className={`w-full flex items-center justify-between p-2.5 rounded-lg text-xs font-bold transition text-left ${
+                      selectedFolderToMove === '' && customMoveFolder === ''
+                        ? 'bg-amber-600 text-white shadow-xs border border-amber-650'
+                        : 'bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 border border-slate-150 dark:border-slate-800'
+                    }`}
+                  >
+                    <span className="flex items-center space-x-2">
+                      <FolderOpen className="w-4 h-4 shrink-0" />
+                      <span>Root Directory (All Vault Files)</span>
+                    </span>
+                    <span className="text-[10px] opacity-70">/</span>
+                  </button>
+
+                  {Array.from(new Set(files.map(f => f.folder).filter(Boolean))).sort().map((folderPath: any) => (
+                    <button
+                      key={folderPath}
+                      type="button"
+                      onClick={() => {
+                        setSelectedFolderToMove(folderPath);
+                        setCustomMoveFolder(folderPath);
+                      }}
+                      className={`w-full flex items-center justify-between p-2.5 rounded-lg text-xs font-bold transition text-left ${
+                        selectedFolderToMove === folderPath
+                          ? 'bg-amber-600 text-white shadow-xs border border-amber-650'
+                          : 'bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 border border-slate-150 dark:border-slate-800'
+                      }`}
+                    >
+                      <span className="flex items-center space-x-2 truncate">
+                        <Folder className="w-4 h-4 shrink-0 text-amber-500 fill-amber-500/10" />
+                        <span className="truncate">{folderPath}</span>
+                      </span>
+                      <span className="text-[10px] opacity-70">
+                        {files.filter(f => f.folder === folderPath).length} {files.filter(f => f.folder === folderPath).length === 1 ? 'file' : 'files'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom input path */}
+              <div className="space-y-1.5 mt-4">
+                <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-1 uppercase tracking-wider text-left">
+                  Or specify a new folder path
+                </label>
+                <div className="relative">
+                  <FolderPlus className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="e.g. Invoices/2026/Q1"
+                    value={customMoveFolder}
+                    onChange={(e) => {
+                      setSelectedFolderToMove(null); // Clear selected tag to focus on custom text
+                      setCustomMoveFolder(e.target.value);
+                    }}
+                    className="w-full text-xs font-bold bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl pl-9 pr-3 py-2.5 text-slate-850 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-amber-500 focus:border-amber-500 font-mono"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed text-left">
+                  Create subfolders by using a slash (<span className="font-mono bg-slate-100 dark:bg-slate-950 px-1 py-0.5 rounded text-xs">/</span>), e.g. <span className="font-mono bg-slate-100 dark:bg-slate-950 px-1 py-0.5 rounded">Financials/Invoices</span>.
+                </p>
+              </div>
+
+              {/* Actions footer */}
+              <div className="grid grid-cols-2 gap-3 mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkMoveModal(false)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-150 dark:hover:bg-slate-705 text-slate-700 dark:text-slate-300 font-bold text-xs transition disabled:opacity-50 cursor-pointer text-center"
+                  disabled={movingBulk}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => executeBulkMove(customMoveFolder.trim() === '' ? null : customMoveFolder.trim())}
+                  disabled={movingBulk}
+                  className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 dark:disabled:bg-slate-805 disabled:text-slate-550 text-white font-bold text-xs shadow-md shadow-amber-100 dark:shadow-none transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                >
+                  {movingBulk ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Relocating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-3.5 h-3.5 text-white" />
+                      <span>Relocate Assets</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Pre-Upload File Preview and Security Configuration Modal */}
+      <AnimatePresence>
+        {isPreUploadPreviewOpen && pendingUploadFile && (
+          <div 
+            id="pre-upload-preview-modal-overlay"
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+            onClick={handleCancelPendingUpload}
+          >
+            <motion.div
+              id="pre-upload-preview-modal-content"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.35 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-2xl w-full max-w-2xl overflow-hidden relative flex flex-col max-h-[90vh] font-sans"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header Title Bar */}
+              <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/20">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                    <ShieldAlert className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-extrabold text-slate-800 dark:text-slate-100 uppercase font-mono tracking-wider">
+                      Vault Upload Inspect
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-505 font-medium">Verify credentials & attributes before server committing</p>
+                  </div>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={handleCancelPendingUpload}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-850 rounded-lg transition"
+                  title="Close inspection"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Scrollable Center Pane */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1 text-left">
+                
+                {/* Upper Grid Area: Visual Preview + Meta Panel */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  
+                  {/* Left Column: Visual Representation Box */}
+                  <div className="bg-slate-50 dark:bg-slate-950/40 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 p-4 flex flex-col items-center justify-center min-h-[190px] relative overflow-hidden group">
+                    
+                    {pendingUploadPreviewUrl ? (
+                      <div className="relative w-full h-full flex items-center justify-center">
+                        <img 
+                          src={pendingUploadPreviewUrl} 
+                          alt="Pre-upload visual asset"
+                          className="max-h-[170px] max-w-full rounded-lg object-contain shadow-xs transition duration-350 group-hover:scale-102"
+                        />
+                        <div className="absolute top-2 right-2 bg-slate-900/80 text-white text-[9px] font-mono px-2 py-0.5 rounded-full select-none flex items-center space-x-1.5 backdrop-blur-xs">
+                          <Image className="w-3 h-3 text-blue-400" />
+                          <span>Image Artifact</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center space-y-3.5">
+                        {(() => {
+                          const typeConfig = getFileTypeConfig(pendingUploadFile.type, pendingUploadFileName || pendingUploadFile.name);
+                          return (
+                            <div className={`w-14 h-14 ${typeConfig.bgColor} rounded-2xl shadow-xs flex items-center justify-center border ${typeConfig.borderColor} mx-auto`}>
+                              {typeConfig.iconLg}
+                            </div>
+                          );
+                        })()}
+                        <div className="space-y-1">
+                          <span className="bg-blue-50/80 dark:bg-blue-950/45 text-blue-700 dark:text-blue-400 text-[10px] font-mono border border-blue-100 dark:border-blue-900/30 px-2 py-0.5 rounded-full font-bold">
+                            {pendingUploadFile.type || 'unknown/binary'}
+                          </span>
+                          <span className="block text-[10px] text-slate-400 dark:text-slate-500 font-medium mt-1">
+                            Format verified safe by fortress firewall
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Column: Editable Metadata Controls */}
+                  <div className="space-y-4">
+                    {/* File Rename Input */}
+                    <div>
+                      <label className="block text-[10px] font-extrabold text-slate-500 dark:text-slate-450 uppercase tracking-widest font-mono mb-1.5">
+                        Document Output Name
+                      </label>
+                      <div className="relative rounded-xl shadow-xs">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Edit3 className="w-3.5 h-3.5 text-slate-400" />
+                        </div>
+                        <input
+                          type="text"
+                          value={pendingUploadFileName}
+                          onChange={(e) => setPendingUploadFileName(e.target.value)}
+                          className="w-full text-xs font-bold font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-slate-800 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-blue-600 focus:border-blue-600 transition"
+                          placeholder="filename.ext"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 font-sans">
+                        You can customize this asset index title securely before committing it.
+                      </p>
+                    </div>
+
+                    {/* Metadata Table */}
+                    <div className="bg-slate-50/50 dark:bg-slate-950/20 border border-slate-100 dark:border-slate-850 rounded-xl p-3 h-[105px] flex flex-col justify-between">
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <span className="text-slate-400 dark:text-slate-505 block">Size</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300 font-mono">{formatBytes(pendingUploadFile.size)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 dark:text-slate-505 block">Local Date</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300 font-mono">
+                            {new Date(pendingUploadFile.lastModified || Date.now()).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-100 dark:border-slate-800 pt-2 text-[10px] flex items-center space-x-1.5 text-slate-500 dark:text-slate-405">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <span className="truncate">Owner: <b>{user?.email || 'Authenticated Client'}</b></span>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Constraint & Optimization Badges */}
+                {pendingUploadFile.size > 15 * 1024 * 1024 ? (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 rounded-xl text-red-800 dark:text-red-400 text-[11px] font-bold flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <span>Fortress Limit Violated: File is {formatBytes(pendingUploadFile.size)}. Compliance guidelines limit files to 15MB.</span>
+                  </div>
+                ) : (pendingUploadFile.type.startsWith('image/') && pendingUploadFile.size > 500 * 1024) ? (
+                  <div className="p-3 bg-blue-50 dark:bg-blue-950/25 border border-blue-100 dark:border-blue-900/30 rounded-xl text-blue-800 dark:text-blue-400 text-[11px] font-bold flex items-start space-x-2">
+                    <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>High-Res Picture: File is {formatBytes(pendingUploadFile.size)}. It will be automatically optimized during execution to ensure compliance bounds.</span>
+                  </div>
+                ) : null}
+
+                {/* Attribute classification tags panel */}
+                <div className="space-y-2">
+                  <span className="block text-[10px] font-extrabold text-slate-500 dark:text-slate-450 uppercase tracking-widest font-mono">
+                    Zero-Trust Access Classification Tags (ABAC)
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {['Draft', 'Final', 'Contract', 'Invoice', 'Confidential', 'Secure', 'Internal'].map((tag) => {
+                      const isSelected = pendingFileTags.includes(tag);
+                      return (
+                        <button
+                          key={`pre-${tag}`}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              setPendingFileTags(prev => prev.filter(t => t !== tag));
+                            } else {
+                              setPendingFileTags(prev => [...prev, tag]);
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-bold font-mono transition-all border cursor-pointer ${
+                            isSelected
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs scale-102'
+                              : 'bg-slate-50 dark:bg-slate-800 text-slate-650 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-350 dark:hover:border-slate-650'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : '+ '}
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                    Applying attribute markers guarantees correct segment encapsulation in the MongoDB Atlas firewall rules.
+                  </p>
+                </div>
+
+              </div>
+
+              {/* Footer Control Buttons */}
+              <div className="grid grid-cols-2 gap-3 p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20">
+                <button
+                  type="button"
+                  id="btn-preupload-refused"
+                  onClick={handleCancelPendingUpload}
+                  className="w-full py-3 px-4 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-250 font-bold text-xs transition border border-slate-200 dark:border-slate-700 cursor-pointer text-center"
+                >
+                  Cancel & Discard Selection
+                </button>
+                <button
+                  type="button"
+                  id="btn-preupload-confirmed"
+                  disabled={pendingUploadFile.size > 15 * 1024 * 1024}
+                  onClick={() => {
+                    setIsPreUploadPreviewOpen(false);
+                    processUpload(pendingUploadFile);
+                  }}
+                  className="w-full py-3 px-4 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:border-slate-300 disabled:text-slate-400 text-white font-bold text-xs shadow-md shadow-blue-100 dark:shadow-none transition flex items-center justify-center space-x-2 cursor-pointer duration-150 active:scale-98 font-bold"
+                >
+                  <CheckCircle className="w-4 h-4 text-white" />
+                  <span>Execute Secure Upload</span>
+                </button>
+              </div>
+
             </motion.div>
           </div>
         )}

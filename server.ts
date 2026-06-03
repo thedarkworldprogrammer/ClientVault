@@ -33,6 +33,7 @@ async function startServer() {
     totalChunks: number;
     chunks: Record<number, string>;
     createdAt: number;
+    folder?: string | null;
   }> = {};
 
   async function getFilesCollection() {
@@ -153,6 +154,7 @@ async function startServer() {
         ownerId: file.ownerId,
         content: file.content,
         tags: file.tags || [],
+        folder: file.folder || null,
       }));
 
       res.json(formattedFiles);
@@ -170,6 +172,7 @@ async function startServer() {
         ownerId: file.ownerId,
         content: file.content,
         tags: file.tags || [],
+        folder: file.folder || null,
       }));
       res.json(formattedFiles);
     }
@@ -276,7 +279,7 @@ async function startServer() {
   // POST: Initiate a chunked upload session
   app.post("/api/files/upload-session", (req, res) => {
     try {
-      const { name, size, type, ownerId, tags, totalChunks } = req.body;
+      const { name, size, type, ownerId, tags, totalChunks, folder } = req.body;
       if (!name || size === undefined || !type || !ownerId || totalChunks === undefined) {
         return res.status(400).json({ error: "Missing required session initiation parameters." });
       }
@@ -299,6 +302,7 @@ async function startServer() {
         totalChunks: Number(totalChunks),
         chunks: {},
         createdAt: now,
+        folder: folder || null,
       };
 
       res.status(201).json({ uploadId });
@@ -335,7 +339,7 @@ async function startServer() {
           assembledContent += session.chunks[i];
         }
 
-        const { name, size, type, ownerId, tags } = session;
+        const { name, size, type, ownerId, tags, folder } = session;
         const collection = await getFilesCollection();
         let insertedId: string;
 
@@ -350,6 +354,7 @@ async function startServer() {
             content: assembledContent,
             uploadedAt: new Date(),
             tags: Array.isArray(tags) ? tags : [],
+            folder: folder || null,
           });
           insertedId = fileId;
         } else {
@@ -362,6 +367,7 @@ async function startServer() {
               content: assembledContent,
               uploadedAt: new Date(),
               tags: Array.isArray(tags) ? tags : [],
+              folder: folder || null,
             });
             insertedId = result.insertedId.toString();
           } catch (dbErr) {
@@ -376,6 +382,7 @@ async function startServer() {
               content: assembledContent,
               uploadedAt: new Date(),
               tags: Array.isArray(tags) ? tags : [],
+              folder: folder || null,
             });
             insertedId = fileId;
           }
@@ -411,7 +418,7 @@ async function startServer() {
   // POST: Upload document metadata and base64 payloads to MongoDB
   app.post("/api/files", async (req, res) => {
     try {
-      const { name, size, type, ownerId, content, tags } = req.body;
+      const { name, size, type, ownerId, content, tags, folder } = req.body;
       if (!name || size === undefined || !type || !ownerId || !content) {
         return res.status(400).json({ error: "Incomplete file parameters received" });
       }
@@ -428,6 +435,7 @@ async function startServer() {
           content,
           uploadedAt: new Date(),
           tags: Array.isArray(tags) ? tags : [],
+          folder: folder || null,
         });
         insertedId = fileId;
       } else {
@@ -439,6 +447,7 @@ async function startServer() {
           content,
           uploadedAt: new Date(),
           tags: Array.isArray(tags) ? tags : [],
+          folder: folder || null,
         });
         insertedId = result.insertedId.toString();
       }
@@ -446,12 +455,12 @@ async function startServer() {
         ownerId,
         "UPLOAD",
         name,
-        `Uploaded file (${formatSize(Number(size))})` + (Array.isArray(tags) && tags.length > 0 ? ` with initial tags: ${tags.join(", ")}` : "")
+        `Uploaded file (${formatSize(Number(size))})` + (Array.isArray(tags) && tags.length > 0 ? ` with initial tags: ${tags.join(", ")}` : "") + (folder ? ` inside folder: "${folder}"` : "")
       );
       res.status(201).json({ id: insertedId, success: true });
     } catch (err: any) {
       console.warn("MongoDB POST file error, saving to In-Memory store fallback:", err);
-      const { name, size, type, ownerId, content, tags } = req.body;
+      const { name, size, type, ownerId, content, tags, folder } = req.body;
       const fileId = "mem_err_" + Math.random().toString(36).substring(2, 11);
       inMemoryFiles.push({
         id: fileId,
@@ -462,12 +471,13 @@ async function startServer() {
         content,
         uploadedAt: new Date(),
         tags: Array.isArray(tags) ? tags : [],
+        folder: folder || null,
       });
       await logActivity(
         ownerId,
         "UPLOAD",
         name,
-        `Uploaded file (${formatSize(Number(size))}) [In-Memory Session]`
+        `Uploaded file (${formatSize(Number(size))}) [In-Memory Session]` + (folder ? ` inside folder: "${folder}"` : "")
       );
       res.status(201).json({ id: fileId, success: true });
     }
@@ -750,6 +760,91 @@ async function startServer() {
     } catch (err: any) {
       console.error("MongoDB bulk RENAME error:", err);
       res.status(500).json({ error: err.message || "Failed to process bulk rename operation." });
+    }
+  });
+
+  // POST: Bulk Move selected files to another folder
+  app.post("/api/files/bulk-move", async (req, res) => {
+    try {
+      const { ids, targetFolder } = req.body;
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids array must not be empty" });
+      }
+
+      // Normalize targetFolder - if it's empty string or empty, treat as null (root)
+      const folderVal = (targetFolder === "" || targetFolder === undefined) ? null : targetFolder;
+
+      const collection = await getFilesCollection();
+      let updatedCount = 0;
+
+      for (const id of ids) {
+        if (!id) continue;
+        let file: any = null;
+
+        if (!collection) {
+          // In-memory update
+          file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            file.folder = folderVal;
+            updatedCount++;
+            await logActivity(
+              file.ownerId,
+              "TAG_UPDATE",
+              file.name,
+              `Moved file to folder: "${folderVal || "Root (All Client Files)"}"`
+            );
+          }
+        } else {
+          if (id.startsWith("mem_")) {
+            file = inMemoryFiles.find(f => f.id === id);
+            if (file) {
+              file.folder = folderVal;
+              updatedCount++;
+              await logActivity(
+                file.ownerId,
+                "TAG_UPDATE",
+                file.name,
+                `Moved file to folder: "${folderVal || "Root (All Client Files)"}"`
+              );
+            }
+          } else {
+            try {
+              file = await collection.findOne({ _id: new ObjectId(id) });
+              if (file) {
+                await collection.updateOne(
+                  { _id: new ObjectId(id) },
+                  { $set: { folder: folderVal } }
+                );
+                updatedCount++;
+                await logActivity(
+                  file.ownerId,
+                  "TAG_UPDATE",
+                  file.name,
+                  `Moved file to folder: "${folderVal || "Root (All Client Files)"}"`
+                );
+              }
+            } catch (dbErr) {
+              console.warn("DB error on bulk move item, trying in-memory lookup:", dbErr);
+              file = inMemoryFiles.find(f => f.id === id);
+              if (file) {
+                file.folder = folderVal;
+                updatedCount++;
+                await logActivity(
+                  file.ownerId,
+                  "TAG_UPDATE",
+                  file.name,
+                  `Moved file to folder: "${folderVal || "Root (All Client Files)"}" [In-Memory]`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      res.json({ success: true, updatedCount });
+    } catch (err: any) {
+      console.error("MongoDB bulk MOVE error:", err);
+      res.status(500).json({ error: err.message || "Failed to process bulk move operation." });
     }
   });
 

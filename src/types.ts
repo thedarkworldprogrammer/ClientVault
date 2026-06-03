@@ -18,6 +18,7 @@ export interface ClientFile {
   ownerId: string;
   content: string; // Base64 data url
   tags?: string[];
+  folder?: string | null;
 }
 
 export interface ActivityLog {

@@ -501,6 +501,8 @@ function AppContent() {
             setFiles={setFiles}
             theme={theme}
             setTheme={setTheme}
+            currentFolder={currentFolder}
+            navigateToFolder={navigateToFolder}
           />
         )}
       </main>
