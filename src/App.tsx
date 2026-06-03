@@ -255,6 +255,7 @@ function AppContent() {
         fileCount={files.length}
         isOpen={sidebarOpen}
         setIsOpen={setSidebarOpen}
+        files={files}
       />
 
       {/* Main viewport */}

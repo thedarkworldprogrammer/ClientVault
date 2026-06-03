@@ -566,7 +566,7 @@ export const SecureChat: React.FC = () => {
                           ? 'bg-blue-600 dark:bg-blue-900 border-blue-550 dark:border-blue-800 text-white rounded-tr-none'
                           : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-150 rounded-tl-none'
                       }`}>
-                        <p className="break-words font-sans">{msg.text}</p>
+                        <p className="break-words font-sans dark:text-white">{msg.text}</p>
                       </div>
                       <div className={`flex items-center space-x-1 mt-1 text-[9px] text-slate-400 font-mono ${isMe ? 'justify-end' : 'justify-start'}`}>
                         <span>{formattedTime}</span>
