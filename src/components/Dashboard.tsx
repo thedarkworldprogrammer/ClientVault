@@ -98,7 +98,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
   const [renamingBulk, setRenamingBulk] = useState(false);
 
   const [selectedTagFilter, setSelectedTagFilter] = useState<string | null>(null);
-  const [selectedUploadTags, setSelectedUploadTags] = useState<string[]>([]);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [loadingActivities, setLoadingActivities] = useState<boolean>(false);
   const [shareExpiresMin, setShareExpiresMin] = useState<number>(60);
@@ -571,7 +570,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
               size: file.size,
               type: file.type || 'application/octet-stream',
               ownerId: user?.uid as string,
-              tags: selectedUploadTags,
+              tags: [],
               totalChunks,
             }),
           });
@@ -1122,75 +1121,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   <span>{uploadSuccess}</span>
                 </div>
               )}
-
-              {/* Upload Pre-tagging Section */}
-              <div id="upload-tagging-container" className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-white rounded-2xl border border-slate-200 gap-4">
-                <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
-                    <Tag className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Pre-apply Tags to Uploads</span>
-                  </span>
-                  <p className="text-[10px] text-slate-400">Newly uploaded files will be automatically labeled with these tags</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {['Draft', 'Final', 'Contract'].map((presetTag) => {
-                    const isSelected = selectedUploadTags.includes(presetTag);
-                    return (
-                      <button
-                        key={presetTag}
-                        id={`btn-upload-tag-${presetTag}`}
-                        type="button"
-                        onClick={() => {
-                          if (isSelected) {
-                            setSelectedUploadTags(selectedUploadTags.filter(t => t !== presetTag));
-                          } else {
-                            setSelectedUploadTags([...selectedUploadTags, presetTag]);
-                          }
-                        }}
-                        className={`text-[11px] font-bold px-3 py-1.5 rounded-lg border transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-blue-600 text-white border-blue-700 shadow-md shadow-blue-100'
-                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        {presetTag}
-                      </button>
-                    );
-                  })}
-                  
-                  {/* Custom tag input for uploads */}
-                  <div className="relative flex items-center">
-                    <input
-                      id="upload-custom-tag-input"
-                      type="text"
-                      placeholder="+ Custom Tag..."
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const val = (e.target as HTMLInputElement).value.trim();
-                          if (val) {
-                            if (!selectedUploadTags.includes(val)) {
-                              setSelectedUploadTags([...selectedUploadTags, val]);
-                            }
-                            (e.target as HTMLInputElement).value = '';
-                          }
-                        }
-                      }}
-                      className="text-[11px] bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-blue-500 w-28 text-left"
-                    />
-                  </div>
-
-                  {selectedUploadTags.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedUploadTags([])}
-                      className="text-[10px] font-semibold text-slate-400 hover:text-red-500 underline ml-1 cursor-pointer"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
             </div>
 
             {/* List area */}
@@ -1202,18 +1132,46 @@ export const Dashboard: React.FC<DashboardProps> = ({ activeTab, files, setFiles
                   <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Manage and share your assets securely</p>
                 </div>
  
-                <div className="relative w-full sm:w-64">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Search className="w-4 h-4" />
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+                  {/* Sorting dropdown */}
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <span className="text-xs text-slate-400 dark:text-slate-500 font-medium whitespace-nowrap scroll-m-20">Sort by:</span>
+                    <select
+                      id="sort-field-select"
+                      value={sortField}
+                      onChange={(e) => setSortField(e.target.value as 'uploadedAt' | 'size' | 'name')}
+                      className="block px-2.5 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-350 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-xs transition cursor-pointer font-medium"
+                    >
+                      <option value="uploadedAt">Date Uploaded</option>
+                      <option value="size">File Size</option>
+                      <option value="name">File Name</option>
+                    </select>
+
+                    <button
+                      id="btn-toggle-sort-order"
+                      type="button"
+                      onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                      className="p-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-900 transition flex items-center justify-center cursor-pointer"
+                      title={sortOrder === 'asc' ? 'Sort Ascending. Click to sort Descending.' : 'Sort Descending. Click to sort Ascending.'}
+                    >
+                      {sortOrder === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-500" /> : <ArrowDown className="w-3.5 h-3.5 text-blue-600 dark:text-blue-500" />}
+                    </button>
                   </div>
-                  <input
-                    id="search-input"
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search in Vault..."
-                    className="block w-full pl-9 pr-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-xs transition"
-                  />
+
+                  {/* Search input */}
+                  <div className="relative w-full sm:w-56">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Search className="w-4 h-4" />
+                    </div>
+                    <input
+                      id="search-input"
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search in Vault..."
+                      className="block w-full pl-9 pr-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-xs transition"
+                    />
+                  </div>
                 </div>
               </div>
 
