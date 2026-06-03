@@ -6,12 +6,13 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext';
 import { AuthMode } from '../types';
-import { Shield, Eye, EyeOff, Loader2, ArrowRight, Lock, Mail } from 'lucide-react';
+import { Shield, Eye, EyeOff, Loader2, ArrowRight, Lock, Mail, User } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { signUp, signIn, error, clearError, loading } = useAuth();
   const [mode, setMode] = useState<AuthMode>(AuthMode.SIGN_IN);
   const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -23,6 +24,10 @@ export const Login: React.FC = () => {
     clearError();
 
     // Validations
+    if (mode === AuthMode.SIGN_UP && !fullName.trim()) {
+      setLocalError('Please enter your full name.');
+      return;
+    }
     if (!email) {
       setLocalError('Please enter your email address.');
       return;
@@ -47,7 +52,7 @@ export const Login: React.FC = () => {
       if (mode === AuthMode.SIGN_IN) {
         await signIn(email, password);
       } else {
-        await signUp(email, password);
+        await signUp(email, password, fullName.trim());
       }
     } catch (err) {
       // Errors are handled inside the AuthContext state
@@ -61,6 +66,7 @@ export const Login: React.FC = () => {
     setLocalError(null);
     setPassword('');
     setConfirmPassword('');
+    setFullName('');
   };
 
   return (
@@ -126,6 +132,30 @@ export const Login: React.FC = () => {
                   <div className="ml-3">
                     <p className="text-sm font-medium text-red-800">{localError || error}</p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Full Name Field (only showing on Sign Up) */}
+            {mode === AuthMode.SIGN_UP && (
+              <div>
+                <label htmlFor="login-name" className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  Full Name
+                </label>
+                <div className="mt-1.5 relative rounded-md">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <User className="h-4.5 w-4.5" />
+                  </div>
+                  <input
+                    id="login-name"
+                    name="fullName"
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="John Doe"
+                    className="block w-full pl-10 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-150 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-sm transition-all bg-slate-50/10 dark:bg-slate-950/30"
+                  />
                 </div>
               </div>
             )}

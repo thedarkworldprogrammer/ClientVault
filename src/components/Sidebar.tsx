@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Shield, FolderKanban, LogOut, FileText, Settings, User, X } from 'lucide-react';
+import { Shield, FolderKanban, LogOut, FileText, Settings, User, X, MessageSquare } from 'lucide-react';
 import { useAuth } from './AuthContext';
 
 interface SidebarProps {
@@ -16,7 +16,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileCount, isOpen, setIsOpen }) => {
-  const { user, logOut } = useAuth();
+  const { user, profile, logOut } = useAuth();
   const isAdmin = user?.uid === 'Od1XeGkGT2esKsPd6lJZ1x7KGzV2';
 
   const handleTabClick = (tabId: string) => {
@@ -78,16 +78,37 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
           {/* Nav Links */}
           <nav className="p-4 space-y-1.5 flex-1">
             {isAdmin ? (
-              <button
-                id="nav-admin"
-                onClick={() => handleTabClick('admin')}
-                className="w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer bg-emerald-600/10 text-emerald-400 shadow-xs border-l-2 border-emerald-500"
-              >
-                <div className="flex items-center space-x-3 text-emerald-400">
-                  <Shield className="w-4 h-4 shrink-0 text-emerald-400" />
-                  <span className="font-bold">Admin Directory</span>
-                </div>
-              </button>
+              <>
+                <button
+                  id="nav-admin"
+                  onClick={() => handleTabClick('admin')}
+                  className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                    activeTab === 'admin'
+                      ? 'bg-emerald-600/10 text-emerald-400 shadow-xs border-l-2 border-emerald-500 font-bold'
+                      : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <Shield className="w-4 h-4 shrink-0 text-emerald-400" />
+                    <span>Admin Directory</span>
+                  </div>
+                </button>
+
+                <button
+                  id="nav-chat-admin"
+                  onClick={() => handleTabClick('chat')}
+                  className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                    activeTab === 'chat'
+                      ? 'bg-emerald-600/10 text-emerald-400 shadow-xs border-l-2 border-emerald-500 font-bold'
+                      : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <MessageSquare className="w-4 h-4 shrink-0" />
+                    <span>Secure Chat</span>
+                  </div>
+                </button>
+              </>
             ) : (
               <>
                 <button
@@ -95,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
                   onClick={() => handleTabClick('files')}
                   className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     activeTab === 'files'
-                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500'
+                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500 font-bold'
                       : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
                   }`}
                 >
@@ -111,11 +132,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
                 </button>
 
                 <button
+                  id="nav-chat-client"
+                  onClick={() => handleTabClick('chat')}
+                  className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                    activeTab === 'chat'
+                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500 font-bold'
+                      : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    <MessageSquare className="w-4 h-4 shrink-0" />
+                    <span>Secure Chat</span>
+                  </div>
+                </button>
+
+                <button
                   id="nav-activity"
                   onClick={() => handleTabClick('activity')}
                   className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     activeTab === 'activity'
-                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500'
+                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500 font-bold'
                       : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
                   }`}
                 >
@@ -130,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
                   onClick={() => handleTabClick('settings')}
                   className={`w-full flex items-center px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     activeTab === 'settings'
-                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500'
+                      ? 'bg-blue-600/10 text-blue-400 shadow-xs border-l-2 border-blue-500 font-bold'
                       : 'text-slate-400 hover:bg-slate-800/30 hover:text-slate-100'
                   }`}
                 >
@@ -151,8 +187,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, fileC
             <User className="w-4 h-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-slate-200 truncate" title={user?.email || 'Active Client'}>
-              {user?.email?.split('@')[0]}
+            <p className="text-xs font-semibold text-slate-200 truncate" title={isAdmin ? 'System Administrator' : (profile?.name || user?.email || 'Active Client')}>
+              {isAdmin ? 'System Administrator' : (profile?.name || user?.email?.split('@')[0] || 'Active Client')}
             </p>
             <p className="text-[10px] text-slate-500 truncate" title={user?.email || ''}>
               {user?.email}

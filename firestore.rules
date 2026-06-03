@@ -16,6 +16,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == 'Od1XeGkGT2esKsPd6lJZ1x7KGzV2';
     }
 
+     function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -29,11 +33,27 @@ service cloud.firestore {
     }
 
     // PILLAR 2: Validation Blueprints (Strict Key & Type matching)
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['senderId', 'senderEmail', 'text', 'timestamp', 'readByAdmin', 'readByClient']) &&
+             data.keys().size() == 6 &&
+             data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 128 &&
+             data.senderEmail is string && data.senderEmail.size() > 0 && data.senderEmail.size() <= 256 &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 10000 &&
+             data.timestamp is timestamp &&
+             data.readByAdmin is bool &&
+             data.readByClient is bool;
+    }
+
     function isValidUserProfile(data) {
-      return data.keys().hasAll(['email', 'createdAt']) &&
+      return (data.keys().hasAll(['email', 'createdAt', 'name']) &&
+             data.keys().size() == 3 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 256 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 256 &&
+             data.createdAt is timestamp) ||
+             (data.keys().hasAll(['email', 'createdAt']) &&
              data.keys().size() == 2 &&
              data.email is string && data.email.size() > 0 && data.email.size() <= 256 &&
-             data.createdAt is timestamp;
+             data.createdAt is timestamp);
     }
 
     function isValidClientFile(data) {
@@ -60,13 +80,13 @@ service cloud.firestore {
                     isValidUserProfile(incoming()) && 
                     incoming().createdAt == request.time) || isAdmin();
                     
-      // Profile details can only modify email, while keeping createdAt immutable (or administrator override)
+      // Profile details can only modify email or name, while keeping createdAt immutable (or administrator override)
       allow update: if (isSignedIn() && 
                     request.auth.uid == userId && 
                     isValidId(userId) && 
                     isValidUserProfile(incoming()) && 
                     incoming().createdAt == existing().createdAt && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['email'])) || isAdmin();
+                    incoming().diff(existing()).affectedKeys().hasOnly(['email', 'name'])) || isAdmin();
                     
       allow delete: if isAdmin();
     }
@@ -103,6 +123,33 @@ service cloud.firestore {
       allow delete: if (isSignedIn() &&
                     isValidId(fileId) &&
                     existing().ownerId == request.auth.uid) || isAdmin();
+    }
+
+    // --- Secure Client-to-Admin Chats ---
+    match /chats/{clientId}/messages/{messageId} {
+      allow list: if isSignedIn() && (request.auth.uid == clientId || isAdmin());
+      allow get: if isSignedIn() && (request.auth.uid == clientId || isAdmin()) && isValidId(clientId) && isValidId(messageId);
+      
+      allow create: if isSignedIn() && 
+                    (request.auth.uid == clientId || isAdmin()) &&
+                    isValidId(clientId) &&
+                    isValidId(messageId) &&
+                    isValidChatMessage(incoming()) &&
+                    incoming().senderId == request.auth.uid &&
+                    incoming().timestamp == request.time;
+                    
+      allow update: if isSignedIn() && 
+                    (request.auth.uid == clientId || isAdmin()) &&
+                    isValidId(clientId) &&
+                    isValidId(messageId) &&
+                    isValidChatMessage(incoming()) &&
+                    incoming().senderId == existing().senderId &&
+                    incoming().senderEmail == existing().senderEmail &&
+                    incoming().text == existing().text &&
+                    incoming().timestamp == existing().timestamp &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['readByAdmin', 'readByClient']);
+                    
+      allow delete: if isAdmin();
     }
   }
 }

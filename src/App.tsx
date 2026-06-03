@@ -10,33 +10,53 @@ import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { PublicShareViewer } from './components/PublicShareViewer';
+import { InactivityTracker } from './components/InactivityTracker';
+import { SecureChat } from './components/SecureChat';
 import { ClientFile } from './types';
 import { testConnection } from './firebase';
-import { Loader2, Shield, Menu, ChevronRight, Home, Folder, Activity, Settings, UploadCloud, CheckCircle, AlertCircle, X } from 'lucide-react';
+import { Loader2, Shield, Menu, ChevronRight, Home, Folder, Activity, Settings, UploadCloud, CheckCircle, AlertCircle, X, MessageSquare, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const tabLabels: Record<string, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
   files: { label: 'Files', icon: Folder },
+  chat: { label: 'Chat', icon: MessageSquare },
   activity: { label: 'Activity', icon: Activity },
   settings: { label: 'Setup', icon: Settings },
   admin: { label: 'Admin', icon: Shield },
 };
 
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const [activeTab, setActiveTab] = useState('files');
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [visitedHistory, setVisitedHistory] = useState<string[]>([]);
-  const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error'; message: string }>>([]);
+  const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error' | 'welcome'; message: string }>>([]);
 
-  const addToast = (type: 'success' | 'error', message: string) => {
+  const addToast = (type: 'success' | 'error' | 'welcome', message: string) => {
     const id = Math.random().toString(36).substring(2, 9);
     setToasts(prev => [...prev, { id, type, message }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
+    }, 6000);
   };
+
+  const [welcomeShownFor, setWelcomeShownFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user && welcomeShownFor !== user.uid) {
+      if (profile || user.email) {
+        const displayName = profile?.name || user.email?.split('@')[0] || 'Active Client';
+        const timer = setTimeout(() => {
+          addToast('welcome', `Identity verified. Welcome back, ${displayName}! Enjoy your high-security ClientVault active workspace session.`);
+          setWelcomeShownFor(user.uid);
+        }, 1200);
+        return () => clearTimeout(timer);
+      }
+    } else if (!user) {
+      setWelcomeShownFor(null);
+    }
+  }, [user, profile, welcomeShownFor]);
 
   useEffect(() => {
     const handleNotification = (e: Event) => {
@@ -221,7 +241,13 @@ function AppContent() {
 
   // Authenticated Portal View
   return (
-    <div id="client-portal-shell" className="min-h-screen bg-slate-50 dark:bg-slate-950 flex h-screen overflow-hidden text-slate-700 dark:text-slate-300 antialiased font-sans relative">
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.985 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+      id="client-portal-shell" 
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 flex h-screen overflow-hidden text-slate-700 dark:text-slate-300 antialiased font-sans relative"
+    >
       {/* Sidebar navigation */}
       <Sidebar 
         activeTab={activeTab} 
@@ -247,14 +273,18 @@ function AppContent() {
             </button>
             <div className="truncate">
               <h1 className="text-base sm:text-xl font-bold text-slate-800 dark:text-slate-100 truncate">
-                {isAdmin && 'Admin Workspace Controls'}
+                {isAdmin && activeTab === 'chat' && 'Admin Communication Command'}
+                {isAdmin && activeTab !== 'chat' && 'Admin Workspace Controls'}
                 {!isAdmin && activeTab === 'files' && 'Client Dashboard'}
+                {!isAdmin && activeTab === 'chat' && 'Secure Chat Terminal'}
                 {!isAdmin && activeTab === 'activity' && 'Portal Action History'}
                 {!isAdmin && activeTab === 'settings' && 'Integration & Guidelines'}
               </h1>
               <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 truncate hidden sm:block">
-                {isAdmin && 'Inspect high-security user directories and workspaces'}
+                {isAdmin && activeTab === 'chat' && 'Bidirectional secure messaging with active tenants'}
+                {isAdmin && activeTab !== 'chat' && 'Inspect high-security user directories and workspaces'}
                 {!isAdmin && activeTab === 'files' && 'Manage and share your assets securely'}
+                {!isAdmin && activeTab === 'chat' && 'Encrypted messaging line directly to global administration'}
                 {!isAdmin && activeTab === 'activity' && 'Tamper-proof file interaction timeline logs'}
                 {!isAdmin && activeTab === 'settings' && 'Zero-trust authorization schemas configurations'}
               </p>
@@ -312,7 +342,7 @@ function AppContent() {
 
             <div className="text-right mr-1 hidden sm:block">
               <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                {isAdmin ? 'System Administrator' : (user?.email?.split('@')[0] || 'Active Client')}
+                {isAdmin ? 'System Administrator' : (profile?.name || user?.email?.split('@')[0] || 'Active Client')}
               </p>
               <p className={`text-xs font-semibold ${isAdmin ? 'text-emerald-500 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-500'}`}>
                 {isAdmin ? 'Global Operator Mode' : 'Client Companion Account'}
@@ -324,8 +354,8 @@ function AppContent() {
               {isAdmin ? (
                 <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               ) : (
-                <div className="w-full h-full bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center text-blue-600 dark:text-blue-400 font-bold text-xs">
-                  {(user?.email?.[0] || 'C').toUpperCase()}
+                <div className="w-full h-full bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center text-blue-600 dark:text-blue-400 font-bold text-xs" title={profile?.name || user?.email || ''}>
+                  {(profile?.name?.[0] || user?.email?.[0] || 'C').toUpperCase()}
                 </div>
               )}
             </div>
@@ -460,7 +490,9 @@ function AppContent() {
         </div>
 
         {/* Core panel contents */}
-        {isAdmin ? (
+        {activeTab === 'chat' ? (
+          <SecureChat />
+        ) : isAdmin ? (
           <AdminDashboard />
         ) : (
           <Dashboard 
@@ -480,23 +512,31 @@ function AppContent() {
             key={toast.id}
             id={`toast-message-${toast.id}`}
             layout
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            initial={{ opacity: 0, y: 30, scale: 0.92 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`pointer-events-auto flex items-start space-x-3 p-4 rounded-xl border shadow-lg backdrop-blur-md transition-all ${
+            className={`pointer-events-auto flex items-start space-x-3.5 p-4.5 rounded-2xl border shadow-xl backdrop-blur-lg transition-all ${
               toast.type === 'success'
-                ? 'bg-emerald-500/90 dark:bg-emerald-950/90 text-white border-emerald-400/30 dark:border-emerald-500/30 shadow-emerald-500/10'
-                : 'bg-rose-500/90 dark:bg-rose-950/90 text-white border-rose-400/30 dark:border-rose-500/30 shadow-rose-500/10'
+                ? 'bg-emerald-500/95 dark:bg-emerald-950/95 text-white border-emerald-400/30 dark:border-emerald-500/30 shadow-emerald-500/10'
+                : toast.type === 'error'
+                  ? 'bg-rose-500/95 dark:bg-rose-950/95 text-white border-rose-400/30 dark:border-rose-500/30 shadow-rose-500/10'
+                  : 'bg-blue-600/95 dark:bg-slate-900/95 text-white border-blue-500/30 dark:border-slate-800 shadow-blue-500/10'
             }`}
           >
-            {toast.type === 'success' ? (
+            {toast.type === 'success' && (
               <CheckCircle className="w-5 h-5 shrink-0 text-emerald-200 dark:text-emerald-405 mt-0.5" />
-            ) : (
+            )}
+            {toast.type === 'error' && (
               <AlertCircle className="w-5 h-5 shrink-0 text-rose-200 dark:text-rose-405 mt-0.5" />
             )}
+            {toast.type === 'welcome' && (
+              <Sparkles className="w-5 h-5 shrink-0 text-amber-200 dark:text-amber-400 mt-0.5" />
+            )}
             
-            <div className="flex-1 min-w-0">
-              <p className="font-bold text-[10px] font-sans tracking-wider uppercase text-white/80 select-none">
-                {toast.type === 'success' ? 'Vault Transfer Success' : 'Vault Transfer Error'}
+            <div className="flex-1 min-w-0 font-sans">
+              <p className="font-extrabold text-[10px] font-sans tracking-widest uppercase text-white/90 select-none font-mono">
+                {toast.type === 'success' && 'Vault Transfer Success'}
+                {toast.type === 'error' && 'Vault Transfer Error'}
+                {toast.type === 'welcome' && 'Identity Access Verified'}
               </p>
               <p className="text-white text-xs mt-1 leading-relaxed break-words font-medium pr-1 select-none">
                 {toast.message}
@@ -512,7 +552,10 @@ function AppContent() {
           </motion.div>
         ))}
       </div>
-    </div>
+
+      {/* Zero-Trust Inactivity Monitor */}
+      <InactivityTracker />
+    </motion.div>
   );
 }
 

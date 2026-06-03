@@ -6,6 +6,7 @@
 export interface UserProfile {
   email: string;
   createdAt: Date;
+  name?: string;
 }
 
 export interface ClientFile {

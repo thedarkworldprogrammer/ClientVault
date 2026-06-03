@@ -11,14 +11,16 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword 
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { AuthMode, UserProfile } from '../types';
 
 interface AuthContextType {
   user: User | null;
+  profile: UserProfile | null;
   loading: boolean;
   error: string | null;
-  signUp: (emailStr: string, passwordStr: string) => Promise<void>;
+  signUp: (emailStr: string, passwordStr: string, nameStr: string) => Promise<void>;
   signIn: (emailStr: string, passwordStr: string) => Promise<void>;
   logOut: () => Promise<void>;
   clearError: () => void;
@@ -28,21 +30,56 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    let unsubscribeProfileSnapshot: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      setLoading(false);
+      
+      if (unsubscribeProfileSnapshot) {
+        unsubscribeProfileSnapshot();
+        unsubscribeProfileSnapshot = null;
+      }
+
+      if (currentUser) {
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        unsubscribeProfileSnapshot = onSnapshot(userDocRef, (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            setProfile({
+              email: data.email,
+              name: data.name || '',
+              createdAt: data.createdAt?.toDate() || new Date(),
+            });
+          } else {
+            setProfile(null);
+          }
+          setLoading(false);
+        }, (err) => {
+          handleFirestoreError(err, OperationType.GET, `users/${currentUser.uid}`);
+          setLoading(false);
+        });
+      } else {
+        setProfile(null);
+        setLoading(false);
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfileSnapshot) {
+        unsubscribeProfileSnapshot();
+      }
+    };
   }, []);
 
   const clearError = () => setError(null);
 
-  const signUp = async (emailStr: string, passwordStr: string) => {
+  const signUp = async (emailStr: string, passwordStr: string, nameStr: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -55,7 +92,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         await setDoc(doc(db, 'users', newUser.uid), {
           email: emailStr,
+          name: nameStr,
           createdAt: serverTimestamp(),
+        });
+        setProfile({
+          email: emailStr,
+          name: nameStr,
+          createdAt: new Date(),
         });
       } catch (dbErr) {
         console.warn('Firestore profile synchronization skipped (Firestore is not provisioned or active in this project):', dbErr);
@@ -114,7 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, signUp, signIn, logOut, clearError }}>
+    <AuthContext.Provider value={{ user, profile, loading, error, signUp, signIn, logOut, clearError }}>
       {children}
     </AuthContext.Provider>
   );

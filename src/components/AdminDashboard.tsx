@@ -36,6 +36,7 @@ import {
 interface FirestoreUser {
   id: string;
   email: string;
+  name?: string;
   createdAt: Date | null;
 }
 
@@ -96,6 +97,7 @@ export const AdminDashboard: React.FC = () => {
         loadedUsers.push({
           id: docSnap.id,
           email: data.email || 'N/A',
+          name: data.name,
           createdAt: createdDate,
         });
       });
@@ -360,7 +362,8 @@ export const AdminDashboard: React.FC = () => {
                           >
                             <td className="px-6 py-4">
                               <div className="flex flex-col">
-                                <span className="font-bold text-slate-800 text-sm">{u.email}</span>
+                                <span className="font-bold text-slate-800 text-sm">{u.name || u.email.split('@')[0]}</span>
+                                <span className="text-[11px] text-slate-500 font-sans">{u.email}</span>
                                 <span className="text-[10px] text-slate-400 font-mono select-all">UID: {u.id}</span>
                               </div>
                             </td>
@@ -430,7 +433,10 @@ export const AdminDashboard: React.FC = () => {
             <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xs">
               <div>
                 <span className="font-mono text-xs text-emerald-500 uppercase tracking-widest font-bold">Auditing Profile</span>
-                <h3 className="text-lg font-bold text-slate-900 mt-1">{selectedUser.email}</h3>
+                <h3 className="text-lg font-bold text-slate-900 mt-1">{selectedUser.name || selectedUser.email}</h3>
+                {selectedUser.name && (
+                  <p className="text-xs text-slate-500 font-sans mt-0.5">{selectedUser.email}</p>
+                )}
                 <p className="text-xs text-slate-400 mt-0.5">
                   Secure Workspace ID: <span className="font-mono text-slate-500 select-all font-semibold">{selectedUser.id}</span>
                 </p>

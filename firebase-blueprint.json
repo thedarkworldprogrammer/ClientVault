@@ -9,6 +9,10 @@
           "type": "string",
           "description": "Email address of the user"
         },
+        "name": {
+          "type": "string",
+          "description": "Full name of the user entered during registration"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -17,7 +21,8 @@
       },
       "required": [
         "email",
-        "createdAt"
+        "createdAt",
+        "name"
       ]
     },
     "ClientFile": {
@@ -59,6 +64,46 @@
         "ownerId",
         "content"
       ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Message sent between an administrator and a tenant",
+      "type": "object",
+      "properties": {
+        "senderId": {
+          "type": "string",
+          "description": "UID of the user who sent this message"
+        },
+        "senderEmail": {
+          "type": "string",
+          "description": "Email address of the sender"
+        },
+        "text": {
+          "type": "string",
+          "description": "Textual payload of the message"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when message was dispatched"
+        },
+        "readByAdmin": {
+          "type": "boolean",
+          "description": "Flags whether the administrator read this message"
+        },
+        "readByClient": {
+          "type": "boolean",
+          "description": "Flags whether the client read this message"
+        }
+      },
+      "required": [
+        "senderId",
+        "senderEmail",
+        "text",
+        "timestamp",
+        "readByAdmin",
+        "readByClient"
+      ]
     }
   },
   "firestore": {
@@ -69,6 +114,10 @@
     "files/{fileId}": {
       "schema": "ClientFile",
       "description": "Collection of secure user files"
+    },
+    "chats/{clientId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "High-security nested chat messages collection for individual communication channels"
     }
   }
 }
