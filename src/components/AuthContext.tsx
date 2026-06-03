@@ -54,6 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: data.email,
               name: data.name || '',
               createdAt: data.createdAt?.toDate() || new Date(),
+              emailNotificationsEnabled: data.emailNotificationsEnabled ?? true,
             });
           } else {
             setProfile(null);
@@ -94,11 +95,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: emailStr,
           name: nameStr,
           createdAt: serverTimestamp(),
+          emailNotificationsEnabled: true,
         });
         setProfile({
           email: emailStr,
           name: nameStr,
           createdAt: new Date(),
+          emailNotificationsEnabled: true,
         });
       } catch (dbErr) {
         console.warn('Firestore profile synchronization skipped (Firestore is not provisioned or active in this project):', dbErr);

@@ -87,16 +87,7 @@ export const InactivityTracker: React.FC = () => {
       if (closeBtn) closeBtn.focus();
 
       countdownIntervalRef.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            // Log out user
-            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-            setIsWarningOpen(false);
-            logOut();
-            return 0;
-          }
-          return prev - 1;
-        });
+        setCountdown(prev => prev - 1);
       }, 1000);
     } else {
       if (countdownIntervalRef.current) {
@@ -110,7 +101,15 @@ export const InactivityTracker: React.FC = () => {
         clearInterval(countdownIntervalRef.current);
       }
     };
-  }, [isWarningOpen, logOut, user]);
+  }, [isWarningOpen, user]);
+
+  // Handle logout trigger safely in a separate effect when countdown reaches zero
+  useEffect(() => {
+    if (user && isWarningOpen && countdown <= 0) {
+      setIsWarningOpen(false);
+      logOut();
+    }
+  }, [countdown, isWarningOpen, logOut, user]);
 
   const handleExtendSession = () => {
     lastActivityRef.current = Date.now();

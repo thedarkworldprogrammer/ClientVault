@@ -7,6 +7,7 @@ export interface UserProfile {
   email: string;
   createdAt: Date;
   name?: string;
+  emailNotificationsEnabled?: boolean;
 }
 
 export interface ClientFile {

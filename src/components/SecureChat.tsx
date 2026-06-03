@@ -33,7 +33,8 @@ import {
   X, 
   AlertCircle,
   Inbox,
-  ChevronRight
+  ChevronRight,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -299,7 +300,7 @@ export const SecureChat: React.FC = () => {
         <div className="flex-1 flex overflow-hidden min-h-0 bg-slate-50 dark:bg-slate-950">
           
           {/* Left panel: Clients Directory Search */}
-          <div className="w-80 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-900 shrink-0">
+          <div className={`w-full md:w-80 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-900 shrink-0 ${selectedClient ? 'hidden md:flex' : 'flex'}`}>
             {/* Search client list Header */}
             <div className="p-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
               <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">Secure Direct Channels</h3>
@@ -378,7 +379,7 @@ export const SecureChat: React.FC = () => {
           </div>
 
           {/* Right panel: Main Conversation pane */}
-          <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-slate-50 dark:bg-slate-950 relative">
+          <div className={`flex-1 flex flex-col overflow-hidden min-w-0 bg-slate-50 dark:bg-slate-950 relative ${!selectedClient ? 'hidden md:flex' : 'flex'}`}>
             <AnimatePresence mode="wait">
               {selectedClient ? (
                 <motion.div
@@ -389,26 +390,36 @@ export const SecureChat: React.FC = () => {
                   className="flex-1 flex flex-col overflow-hidden h-full"
                 >
                   {/* Top metadata control bar */}
-                  <div className="h-16 px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
-                    <div className="min-w-0">
-                      <div className="flex items-center space-x-2">
-                        <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 truncate" title={selectedClient.email}>
-                          {selectedClient.name ? `${selectedClient.name} (${selectedClient.email})` : selectedClient.email}
-                        </h4>
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <div className="h-16 px-4 md:px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+                    <div className="min-w-0 flex items-center space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedClient(null)}
+                        className="md:hidden p-1.5 -ml-1 rounded-lg text-slate-500 hover:text-slate-850 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-150 dark:hover:bg-slate-800 transition shrink-0"
+                        title="Back to clients list"
+                      >
+                        <ArrowLeft className="w-4.5 h-4.5" />
+                      </button>
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-2">
+                          <h4 className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 truncate" title={selectedClient.email}>
+                            {selectedClient.name ? `${selectedClient.name} (${selectedClient.email})` : selectedClient.email}
+                          </h4>
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                        </div>
+                        <p className="text-[9px] sm:text-[10px] text-slate-400 font-mono select-all truncate">Workspace: {selectedClient.id}</p>
                       </div>
-                      <p className="text-[10px] text-slate-400 font-mono select-all truncate">Workspace: {selectedClient.id}</p>
                     </div>
 
                     <button
                       id="btn-purge-chat-admin"
                       onClick={handlePurgeHistory}
                       disabled={clearingHistory || messages.length === 0}
-                      className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-red-200 hover:border-red-300 bg-red-50 hover:bg-red-100 text-red-700 transition font-bold text-[10px] tracking-wide uppercase cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center space-x-1 sm:space-x-1.5 px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg border border-red-200 hover:border-red-300 bg-red-50 hover:bg-red-100 text-red-700 transition font-bold text-[8.5px] sm:text-[10px] tracking-wide uppercase cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Clear chat and message documentation history for this client"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>{clearingHistory ? 'Purging...' : 'Purge History'}</span>
+                      <Trash2 className="w-2 h-3 sm:w-3.5 sm:h-3.5" />
+                      <span className="text-xs">{clearingHistory ? 'Purging...' : 'Purge History'}</span>
                     </button>
                   </div>
 

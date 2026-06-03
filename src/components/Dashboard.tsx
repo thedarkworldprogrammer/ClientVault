@@ -64,7 +64,8 @@ import {
   ChevronRight,
   Type,
   Edit3,
-  ShieldAlert
+  ShieldAlert,
+  Mail
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -97,6 +98,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [zipProgress, setZipProgress] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [uploadNotificationSent, setUploadNotificationSent] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
   const [selectedPreviewFile, setSelectedPreviewFile] = useState<ClientFile | null>(null);
   const [fileToDelete, setFileToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -143,6 +145,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [newName, setNewName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [saveNameError, setSaveNameError] = useState<string | null>(null);
+  const [updatingNotifications, setUpdatingNotifications] = useState(false);
 
   useEffect(() => {
     if (profile?.name) {
@@ -152,6 +155,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setNewName(user.email.split('@')[0]);
     }
   }, [profile, user]);
+
+  const handleToggleNotifications = async () => {
+    if (!user) return;
+    setUpdatingNotifications(true);
+    const currentValue = profile?.emailNotificationsEnabled ?? true;
+    const newValue = !currentValue;
+    try {
+      const userDocRef = doc(db, 'users', user.uid);
+      if (profile) {
+        await setDoc(userDocRef, {
+          email: user.email || '',
+          name: profile.name || '',
+          createdAt: profile.createdAt,
+          emailNotificationsEnabled: newValue
+        });
+      } else {
+        await setDoc(userDocRef, {
+          email: user.email || '',
+          name: user.email?.split('@')[0] || '',
+          createdAt: serverTimestamp(),
+          emailNotificationsEnabled: newValue
+        });
+      }
+      setUploadSuccess(`Saved successfully! Email notifications are now ${newValue ? 'ENABLED' : 'DISABLED'}.`);
+      setTimeout(() => setUploadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Error toggling notifications:', err);
+      setUploadError(err.message || 'Failed to update notification settings.');
+      setTimeout(() => setUploadError(null), 4000);
+    } finally {
+      setUpdatingNotifications(false);
+    }
+  };
 
   const handleSaveName = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -172,6 +208,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           email: user.email || '',
           name: newName.trim(),
           createdAt: profile.createdAt,
+          emailNotificationsEnabled: profile.emailNotificationsEnabled ?? true,
         });
       } else {
         // New setup: provision profile with standard serverTimestamp
@@ -179,6 +216,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           email: user.email || '',
           name: newName.trim(),
           createdAt: serverTimestamp(),
+          emailNotificationsEnabled: true,
         });
       }
       setIsEditNameModalOpen(false);
@@ -791,6 +829,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
           setUploadProgress(100);
           const successMsg = `"${pendingUploadFileName || file.name}" uploaded successfully via secure segmented transfer!`;
           setUploadSuccess(successMsg);
+
+          const isNotifEnabled = profile?.emailNotificationsEnabled ?? true;
+          setUploadNotificationSent(
+            isNotifEnabled
+              ? `Automated upload notification email dispatched to ${user?.email || 'registered address'}!`
+              : `Upload email notification bypassed (Opted-out under Setup)`
+          );
+
           fetchFiles(); // Re-fetch the list
           fetchActivities(); // Refresh activities stream
           window.dispatchEvent(new CustomEvent('secure-upload-notification', {
@@ -810,9 +856,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           // Clear notification automatically after showing complete state
           setTimeout(() => {
             setUploadSuccess(null);
+            setUploadNotificationSent(null);
             setUploading(false);
             setUploadProgress(0);
-          }, 1500);
+          }, 4000);
         } catch (dbErr: any) {
           console.error('Segmented transfer failed:', dbErr);
           const errMsg = dbErr.message || 'Segmented transfer failed to save document.';
@@ -1558,6 +1605,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span>{uploadSuccess}</span>
                 </div>
               )}
+
+              {uploadNotificationSent && (
+                <div id="alert-upload-notification" className={`flex items-center space-x-2.5 p-3.5 rounded-xl text-xs font-semibold border ${
+                  uploadNotificationSent.includes('dispatched')
+                    ? 'bg-blue-50/70 text-blue-800 dark:bg-blue-950/20 dark:text-blue-300 border-blue-100/50 dark:border-blue-900/40'
+                    : 'bg-slate-50 text-slate-700 dark:bg-slate-900 dark:text-slate-400 border-slate-150/60 dark:border-slate-800/80'
+                }`}>
+                  <Mail className="w-4 h-4 text-blue-500 dark:text-blue-400 shrink-0" />
+                  <span>{uploadNotificationSent}</span>
+                </div>
+              )}
             </div>
 
             {/* Recent Files Quick Access */}
@@ -2066,18 +2124,282 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </table>
                 </div>
               ) : (
-                <div id="empty-state-panel" className="p-12 text-center flex flex-col items-center">
-                  <div className="p-4 bg-slate-50 text-slate-400 rounded-full mb-3 border border-slate-100">
-                    <Search className="w-6 h-6 text-slate-400" />
+                files.length === 0 ? (
+                  <div id="empty-state-vault-illustration" className="p-10 sm:p-16 text-center flex flex-col items-center justify-center bg-linear-to-b from-slate-50/50 to-slate-100/5 dark:from-slate-900/40 dark:to-slate-950/5 rounded-2xl relative overflow-hidden transition-all duration-300">
+                    {/* Glowing background aura */}
+                    <div className="absolute -top-24 w-72 h-72 bg-blue-500/5 dark:bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+                    <div className="absolute -bottom-24 w-72 h-72 bg-emerald-500/5 dark:bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+                    {/* Animated SVG Illustration */}
+                    <div className="relative w-80 h-56 flex items-center justify-center select-none" id="empty-vault-svg-container">
+                      <svg width="280" height="200" viewBox="0 0 280 200" fill="none" className="overflow-visible">
+                        {/* Shadow of Safe */}
+                        <ellipse cx="140" cy="175" rx="55" ry="8" fill="rgba(0, 0, 0, 0.05)" className="dark:hidden" />
+                        <ellipse cx="140" cy="175" rx="55" ry="8" fill="rgba(0, 0, 0, 0.2)" className="hidden dark:block" />
+
+                        {/* Floating blue sheet */}
+                        <motion.g
+                          animate={{ 
+                            y: [0, -12, 0],
+                            rotate: [0, 4, -4, 0]
+                          }}
+                          transition={{ 
+                            duration: 4.5, 
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          {/* Sheet Base */}
+                          <path d="M45 55 h30 l12 12 v40 h-42 z" fill="url(#blueSheetGrad)" className="drop-shadow-xs" />
+                          {/* Corner fold */}
+                          <path d="M75 55 v12 h12 z" fill="#c3dafe" className="dark:hidden" />
+                          <path d="M75 55 v12 h12 z" fill="#1e40af" className="hidden dark:block" />
+                          {/* Fake lines */}
+                          <line x1="53" y1="75" x2="77" y2="75" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="53" y1="85" x2="83" y2="85" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="53" y1="95" x2="70" y2="95" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeOpacity="0.8" />
+                        </motion.g>
+
+                        {/* Floating emerald sheet */}
+                        <motion.g
+                          animate={{ 
+                            y: [0, -8, 0],
+                            rotate: [0, -6, 6, 0]
+                          }}
+                          transition={{ 
+                            duration: 5, 
+                            delay: 1,
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          {/* Sheet Base */}
+                          <path d="M195 45 h26 l10 10 v36 h-36 z" fill="url(#emeraldSheetGrad)" className="drop-shadow-xs" />
+                          {/* Corner fold */}
+                          <path d="M221 45 v10 h10 z" fill="#a7f3d0" className="dark:hidden" />
+                          <path d="M221 45 v10 h10 z" fill="#065f46" className="hidden dark:block" />
+                          {/* Fake graph lines */}
+                          <line x1="202" y1="62" x2="220" y2="62" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="202" y1="70" x2="224" y2="70" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="202" y1="78" x2="214" y2="78" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeOpacity="0.8" />
+                        </motion.g>
+
+                        {/* Floating golden small paper */}
+                        <motion.g
+                          animate={{ 
+                            y: [0, -10, 0],
+                            rotate: [0, 5, -5, 0]
+                          }}
+                          transition={{ 
+                            duration: 3.8, 
+                            delay: 0.5,
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          <rect x="55" y="115" width="22" height="30" rx="3" fill="url(#amberSheetGrad)" className="drop-shadow-6xs" />
+                          <line x1="60" y1="124" x2="72" y2="124" stroke="#ffffff" strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="60" y1="130" x2="70" y2="130" stroke="#ffffff" strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.8" />
+                          <line x1="60" y1="136" x2="66" y2="136" stroke="#ffffff" strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.8" />
+                        </motion.g>
+
+                        {/* Floating security shield badge */}
+                        <motion.g
+                          animate={{ 
+                            y: [0, -14, 0],
+                            scale: [1, 1.05, 0.95, 1]
+                          }}
+                          transition={{ 
+                            duration: 5.2, 
+                            delay: 1.5,
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          <path d="M210 115 c0 0 10 -4 14 -4 c4 0 14 4 14 4 c0 10 -3 20 -14 26 c-11 -6 -14 -16 -14 -26 z" fill="url(#shieldGrad)" className="drop-shadow-sm" />
+                          <path d="M224 122 l-4 4 l-2 -2" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </motion.g>
+
+                        {/* Central Custodian Robot Safe */}
+                        <motion.g
+                          animate={{ 
+                            y: [0, -4, 0]
+                          }}
+                          transition={{ 
+                            duration: 4, 
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          {/* Safe Body Shadow Inner */}
+                          <rect x="90" y="65" width="100" height="105" rx="20" fill="url(#safeGrad)" stroke="#1e293b" strokeWidth="3" className="drop-shadow-md" />
+                          
+                          {/* Screen / Face */}
+                          <rect x="103" y="78" width="74" height="40" rx="10" fill="#0f172a" stroke="#334155" strokeWidth="1.5" />
+                          
+                          {/* Glowing circular eyes */}
+                          <motion.circle 
+                            cx="118" 
+                            cy="98" 
+                            r="5" 
+                            fill="#38bdf8" 
+                            animate={{
+                              scaleY: [1, 1, 0.1, 1, 1, 1, 0.1, 1]
+                            }}
+                            transition={{
+                              duration: 5,
+                              repeat: Infinity,
+                              ease: "easeInOut"
+                            }}
+                            className="shadow-xs shadow-blue-500"
+                          />
+                          <motion.circle 
+                            cx="162" 
+                            cy="98" 
+                            r="5" 
+                            fill="#38bdf8" 
+                            animate={{
+                              scaleY: [1, 1, 0.1, 1, 1, 1, 0.1, 1]
+                            }}
+                            transition={{
+                              duration: 5,
+                              repeat: Infinity,
+                              ease: "easeInOut"
+                            }}
+                            className="shadow-xs shadow-blue-500"
+                          />
+                          
+                          {/* Cute Digital Smile */}
+                          <path d="M136 102 q4 3 8 0" stroke="#38bdf8" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+
+                          {/* Safe Handle Dial Plate */}
+                          <circle cx="140" cy="140" r="15" fill="#334155" stroke="#475569" strokeWidth="1.5" />
+                          
+                          {/* Animated Rotating Dial Lock */}
+                          <motion.g
+                            animate={{ 
+                              rotate: [0, 360]
+                            }}
+                            transition={{ 
+                              duration: 15, 
+                              repeat: Infinity, 
+                              ease: "linear" 
+                            }}
+                            style={{ originX: '140px', originY: '140px' }}
+                          >
+                            <circle cx="140" cy="140" r="10" fill="url(#lockDialGrad)" />
+                            <circle cx="140" cy="133" r="1.5" fill="#ffffff" />
+                          </motion.g>
+
+                          {/* Dual Handle Pegs */}
+                          <rect x="110" y="137" width="12" height="6" rx="2" fill="#64748b" />
+                          <circle cx="112" cy="140" r="1.5" fill="#cbd5e1" />
+                        </motion.g>
+
+                        {/* Magical Spikey Sparkles */}
+                        <motion.g
+                          animate={{ 
+                            opacity: [0.3, 1, 0.3],
+                            scale: [0.8, 1.2, 0.8]
+                          }}
+                          transition={{ 
+                            duration: 3, 
+                            repeat: Infinity, 
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          {/* Sparkle Left */}
+                          <path d="M35,135 Q35,140 40,140 Q35,140 35,145 Q35,140 30,140 Q35,140 35,135 Z" fill="#fbbf24" />
+                          {/* Sparkle Right Top */}
+                          <path d="M245,65 Q245,70 250,70 Q245,70 245,75 Q245,70 240,70 Q245,70 245,65 Z" fill="#60a5fa" />
+                          {/* Sparkle Center Bottom */}
+                          <path d="M110,40 Q110,45 115,45 Q110,45 110,50 Q110,45 105,45 Q110,45 110,40 Z" fill="#34d399" />
+                        </motion.g>
+
+                        {/* Defs/Gradients */}
+                        <defs>
+                          <linearGradient id="blueSheetGrad" x1="45" y1="55" x2="87" y2="107" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#3b82f6" />
+                            <stop offset="100%" stopColor="#1d4ed8" />
+                          </linearGradient>
+                          <linearGradient id="emeraldSheetGrad" x1="195" y1="45" x2="231" y2="91" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#10b981" />
+                            <stop offset="100%" stopColor="#047857" />
+                          </linearGradient>
+                          <linearGradient id="amberSheetGrad" x1="55" y1="115" x2="77" y2="145" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#f59e0b" />
+                            <stop offset="100%" stopColor="#b45309" />
+                          </linearGradient>
+                          <linearGradient id="shieldGrad" x1="210" y1="111" x2="238" y2="137" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#10b981" />
+                            <stop offset="100%" stopColor="#064e3b" />
+                          </linearGradient>
+                          <linearGradient id="safeGrad" x1="90" y1="65" x2="190" y2="170" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#475569" />
+                            <stop offset="50%" stopColor="#334155" />
+                            <stop offset="100%" stopColor="#1e293b" />
+                          </linearGradient>
+                          <linearGradient id="lockDialGrad" x1="130" y1="130" x2="150" y2="150" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stopColor="#f59e0b" />
+                            <stop offset="100%" stopColor="#d97706" />
+                          </linearGradient>
+                        </defs>
+                      </svg>
+
+                      {/* Directional indicator */}
+                      <div className="absolute -top-1 right-20 animate-bounce pointer-events-none">
+                        <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-500/20 backdrop-blur-xs flex items-center space-x-1">
+                          <span>↑</span>
+                          <span>Upload Zone</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <h3 className="text-md sm:text-lg font-extrabold text-slate-850 dark:text-slate-100 tracking-tight mt-6">
+                      Your Secure Vault is Empty & Ready
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 max-w-md mx-auto leading-relaxed">
+                      Initialize your client-side encryption workspace by uploading files. Once added, documents are segment-packaged and guarded under our strict zero-trust fortress boundaries.
+                    </p>
+
+                    <div className="flex flex-wrap items-center justify-center gap-3 mt-6">
+                      <button
+                        type="button"
+                        id="empty-state-browse-files-btn"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center space-x-2 shadow-xs cursor-pointer active:scale-95 duration-100"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Select First File to Encrypt</span>
+                      </button>
+                    </div>
+
+                    {/* Creative prompt ideas */}
+                    <div className="mt-8 pt-6 border-t border-slate-150/50 dark:border-slate-800/45 w-full max-w-sm mx-auto">
+                      <p className="text-[10px] font-mono font-extrabold text-slate-400/80 dark:text-slate-500 uppercase tracking-widest">Recommended File Formats</p>
+                      <div className="flex flex-wrap justify-center gap-1.5 mt-3">
+                        {['Contracts (PDF)', 'Invoices (XLS)', 'Graphics (PNG/JPG)', 'Archives (ZIP)'].map((type) => (
+                          <span key={type} className="text-[11px] bg-slate-100 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800 text-slate-550 dark:text-slate-400 px-2.5 py-1 rounded-lg font-medium">
+                            {type}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <h4 className="text-sm font-bold text-slate-800">No client files found</h4>
-                  <p className="text-xs text-slate-400 mt-1 max-w-xs">
-                    {searchQuery 
-                      ? "We couldn't find any file matching your keyword. Please alter your search."
-                      : "Your vault is currently empty. Start by dragging a document directly into the dropzone above."
-                    }
-                  </p>
-                </div>
+                ) : (
+                  <div id="empty-state-panel" className="p-12 text-center flex flex-col items-center">
+                    <div className="p-4 bg-slate-50 text-slate-400 rounded-full mb-3 border border-slate-100">
+                      <Search className="w-6 h-6 text-slate-400" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-800">No client files found</h4>
+                    <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                      {searchQuery 
+                        ? "We couldn't find any file matching your keyword. Please alter your search."
+                        : "Your vault is currently empty. Start by dragging a document directly into the dropzone above."
+                      }
+                    </p>
+                  </div>
+                )
               )}
             </div>
           </>
@@ -2378,6 +2700,45 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span
                       className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
                         theme === 'dark' ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Automated Email Notifications Opt-in Toggle */}
+            <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 justify-center">
+                <div className="flex items-center space-x-3.5">
+                  <div className="w-11 h-11 bg-emerald-500/10 dark:bg-emerald-600/20 text-emerald-600 dark:text-emerald-400 rounded-xl flex items-center justify-center shrink-0">
+                    <Mail className="w-5 h-5 text-emerald-500 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 uppercase font-mono tracking-wider">Automated Email Notifications</h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Opt-in or out of automatic notifications whenever a new file is uploaded to your vault</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center space-x-3 bg-slate-50 dark:bg-slate-950 px-4 py-2.5 rounded-xl border border-slate-150 dark:border-slate-850 shrink-0">
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                    {(profile?.emailNotificationsEnabled ?? true) ? 'Opted In' : 'Opted Out'}
+                  </span>
+                  
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={profile?.emailNotificationsEnabled ?? true}
+                    id="email-notification-toggle-switch"
+                    disabled={updatingNotifications}
+                    onClick={handleToggleNotifications}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:opacity-50 ${
+                      (profile?.emailNotificationsEnabled ?? true) ? 'bg-emerald-600' : 'bg-slate-200 dark:bg-slate-805'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                        (profile?.emailNotificationsEnabled ?? true) ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
