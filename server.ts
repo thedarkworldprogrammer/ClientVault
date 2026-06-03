@@ -36,15 +36,48 @@ async function startServer() {
     folder?: string | null;
   }> = {};
 
+  let isConnecting = false;
+
+  async function connectToMongoSilently() {
+    if (useInMemoryFallback) return;
+    if (mongoClient) return;
+    if (isConnecting) {
+      // If another concurrent request is already booting up, pause for a moment to let it finish
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (mongoClient) return;
+    }
+
+    try {
+      isConnecting = true;
+      const client = new MongoClient(mongoUri, { 
+        connectTimeoutMS: 2000, 
+        socketTimeoutMS: 2000,
+        serverSelectionTimeoutMS: 2000 
+      });
+      await client.connect();
+      console.log("Lazy initialization: connected securely to MongoDB instance.");
+      
+      const db = client.db("clientvault");
+      // Pre-create indexes asynchronously without blocking connection success
+      db.collection("files").createIndex({ ownerId: 1, uploadedAt: -1 }).catch(() => {});
+      db.collection("activities").createIndex({ ownerId: 1, timestamp: -1 }).catch(() => {});
+      
+      mongoClient = client;
+    } catch (err) {
+      console.error("MongoDB lazy connection connection failed:", err);
+      mongoClient = null;
+      useInMemoryFallback = true;
+      throw err;
+    } finally {
+      isConnecting = false;
+    }
+  }
+
   async function getFilesCollection() {
     if (useInMemoryFallback) return null;
     try {
-      if (!mongoClient) {
-        mongoClient = new MongoClient(mongoUri, { connectTimeoutMS: 5000, socketTimeoutMS: 5000 });
-        await mongoClient.connect();
-        console.log("Lazy initialization: connected securely to MongoDB instance.");
-      }
-      const db = mongoClient.db("clientvault");
+      await connectToMongoSilently();
+      const db = mongoClient!.db("clientvault");
       return db.collection("files");
     } catch (err) {
       console.warn("MongoDB Client files collection failed. Switching automatically to durable In-Memory fallback storage.", err);
@@ -56,12 +89,8 @@ async function startServer() {
   async function getActivitiesCollection() {
     if (useInMemoryFallback) return null;
     try {
-      if (!mongoClient) {
-        mongoClient = new MongoClient(mongoUri, { connectTimeoutMS: 5000, socketTimeoutMS: 5000 });
-        await mongoClient.connect();
-        console.log("Lazy initialization: connected securely to MongoDB instance.");
-      }
-      const db = mongoClient.db("clientvault");
+      await connectToMongoSilently();
+      const db = mongoClient!.db("clientvault");
       return db.collection("activities");
     } catch (err) {
       console.warn("MongoDB Client activities collection failed. Switching automatically to durable In-Memory fallback storage.", err);
@@ -73,12 +102,8 @@ async function startServer() {
   async function getSharesCollection() {
     if (useInMemoryFallback) return null;
     try {
-      if (!mongoClient) {
-        mongoClient = new MongoClient(mongoUri, { connectTimeoutMS: 5000, socketTimeoutMS: 5000 });
-        await mongoClient.connect();
-        console.log("Lazy initialization: connected securely to MongoDB instance.");
-      }
-      const db = mongoClient.db("clientvault");
+      await connectToMongoSilently();
+      const db = mongoClient!.db("clientvault");
       return db.collection("shares");
     } catch (err) {
       console.warn("MongoDB Client shares collection failed. Switching automatically to durable In-Memory fallback storage.", err);
@@ -129,6 +154,55 @@ async function startServer() {
 
   /* API Endpoints for File Management */
 
+  async function pruneExpiredTrash(ownerId: string) {
+    try {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const collection = await getFilesCollection();
+      if (collection) {
+        const expiredFiles = await collection.find({
+          ownerId,
+          isDeleted: true,
+          deletedAt: { $lt: thirtyDaysAgo }
+        }).toArray();
+        
+        if (expiredFiles.length > 0) {
+          const expiredIds = expiredFiles.map(f => f._id);
+          const expiredNames = expiredFiles.map(f => f.name).join(", ");
+          await collection.deleteMany({ _id: { $in: expiredIds } });
+          console.log(`Auto-pruned expired trash files for user ${ownerId}: ${expiredNames}`);
+          
+          await logActivity(
+            ownerId,
+            "DELETE",
+            "Auto Purge",
+            `Permanently auto-purged expired trash assets: ${expiredNames}`
+          );
+        }
+      }
+      
+      const thirtyDaysAgoTime = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const expiredInMemory = inMemoryFiles.filter(f => f.ownerId === ownerId && f.isDeleted && f.deletedAt && new Date(f.deletedAt).getTime() < thirtyDaysAgoTime);
+      if (expiredInMemory.length > 0) {
+        const expiredNames = expiredInMemory.map(f => f.name).join(", ");
+        for (let i = inMemoryFiles.length - 1; i >= 0; i--) {
+          const f = inMemoryFiles[i];
+          if (f.ownerId === ownerId && f.isDeleted && f.deletedAt && new Date(f.deletedAt).getTime() < thirtyDaysAgoTime) {
+            inMemoryFiles.splice(i, 1);
+          }
+        }
+        
+        await logActivity(
+          ownerId,
+          "DELETE",
+          "Auto Purge (Local)",
+          `Permanently automated local purge of expired assets: ${expiredNames}`
+        );
+      }
+    } catch (err) {
+      console.error("Expired trash pruning failed:", err);
+    }
+  }
+
   // GET: Retrieve list of client files from MongoDB
   app.get("/api/files", async (req, res) => {
     try {
@@ -136,13 +210,17 @@ async function startServer() {
       if (!ownerId) {
         return res.status(400).json({ error: "ownerId query parameter is mandatory" });
       }
+      
+      // Perform automated pruning first
+      await pruneExpiredTrash(ownerId);
+
       const collection = await getFilesCollection();
       let files: any[] = [];
       if (!collection) {
         files = inMemoryFiles.filter(file => file.ownerId === ownerId);
         files.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
       } else {
-        files = await collection.find({ ownerId }).sort({ uploadedAt: -1 }).toArray();
+        files = await collection.find({ ownerId }, { allowDiskUse: true }).sort({ uploadedAt: -1 }).allowDiskUse(true).toArray();
       }
 
       const formattedFiles = files.map((file) => ({
@@ -155,6 +233,8 @@ async function startServer() {
         content: file.content,
         tags: file.tags || [],
         folder: file.folder || null,
+        isDeleted: !!file.isDeleted,
+        deletedAt: file.deletedAt || null,
       }));
 
       res.json(formattedFiles);
@@ -173,6 +253,8 @@ async function startServer() {
         content: file.content,
         tags: file.tags || [],
         folder: file.folder || null,
+        isDeleted: !!file.isDeleted,
+        deletedAt: file.deletedAt || null,
       }));
       res.json(formattedFiles);
     }
@@ -192,7 +274,7 @@ async function startServer() {
         activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         activities = activities.slice(0, 50);
       } else {
-        activities = await collection.find({ ownerId }).sort({ timestamp: -1 }).limit(50).toArray();
+        activities = await collection.find({ ownerId }, { allowDiskUse: true }).sort({ timestamp: -1 }).limit(50).allowDiskUse(true).toArray();
       }
 
       const formattedActivities = activities.map((act) => ({
@@ -534,6 +616,254 @@ async function startServer() {
       } else {
         res.status(500).json({ error: err.message || "Unable to update file tags." });
       }
+    }
+  });
+
+  // POST: Soft delete (move to trash)
+  app.post("/api/files/:id/trash", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ error: "id path parameter is mandatory" });
+      }
+      const collection = await getFilesCollection();
+      let file: any;
+      if (!collection) {
+        file = inMemoryFiles.find(f => f.id === id);
+        if (!file) {
+          return res.status(404).json({ error: "File not found" });
+        }
+        file.isDeleted = true;
+        file.deletedAt = new Date().toISOString();
+      } else {
+        if (id.startsWith("mem_")) {
+          file = inMemoryFiles.find(f => f.id === id);
+          if (!file) {
+            return res.status(404).json({ error: "File not found" });
+          }
+          file.isDeleted = true;
+          file.deletedAt = new Date().toISOString();
+        } else {
+          file = await collection.findOne({ _id: new ObjectId(id) });
+          if (!file) {
+            return res.status(404).json({ error: "File not found" });
+          }
+          await collection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isDeleted: true, deletedAt: new Date() } }
+          );
+        }
+      }
+      await logActivity(
+        file.ownerId,
+        "DELETE",
+        file.name,
+        "File moved to Secure Trash (scheduled for auto-purge in 30 days)."
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("MongoDB soft delete error, updating local memory copy:", err);
+      const { id } = req.params;
+      const file = inMemoryFiles.find(f => f.id === id);
+      if (file) {
+        file.isDeleted = true;
+        file.deletedAt = new Date().toISOString();
+        await logActivity(
+          file.ownerId,
+          "DELETE",
+          file.name,
+          "File moved to local Secure Trash copy (scheduled for auto-purge in 30 days)."
+        );
+        res.json({ success: true });
+      } else {
+        res.status(500).json({ error: err.message || "Failed to move file to Trash." });
+      }
+    }
+  });
+
+  // POST: Restore from trash
+  app.post("/api/files/:id/restore", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ error: "id path parameter is mandatory" });
+      }
+      const collection = await getFilesCollection();
+      let file: any;
+      if (!collection) {
+        file = inMemoryFiles.find(f => f.id === id);
+        if (!file) {
+          return res.status(404).json({ error: "File not found for restoration" });
+        }
+        file.isDeleted = false;
+        file.deletedAt = null;
+      } else {
+        if (id.startsWith("mem_")) {
+          file = inMemoryFiles.find(f => f.id === id);
+          if (!file) {
+            return res.status(404).json({ error: "File not found for restoration" });
+          }
+          file.isDeleted = false;
+          file.deletedAt = null;
+        } else {
+          file = await collection.findOne({ _id: new ObjectId(id) });
+          if (!file) {
+            return res.status(404).json({ error: "File not found for restoration" });
+          }
+          await collection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isDeleted: false, deletedAt: null } }
+          );
+        }
+      }
+      await logActivity(
+        file.ownerId,
+        "RESTORE",
+        file.name,
+        "File successfully restored from Secure Trash to active directory."
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("MongoDB restore error, updating local memory copy:", err);
+      const { id } = req.params;
+      const file = inMemoryFiles.find(f => f.id === id);
+      if (file) {
+        file.isDeleted = false;
+        file.deletedAt = null;
+        await logActivity(
+          file.ownerId,
+          "RESTORE",
+          file.name,
+          "File restored from local Secure Trash copy to active directory."
+        );
+        res.json({ success: true });
+      } else {
+        res.status(500).json({ error: err.message || "Failed to restore file." });
+      }
+    }
+  });
+
+  // POST: Move multiple files to trash (bulk-trash)
+  app.post("/api/files/bulk-trash", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids array is required and must not be empty" });
+      }
+      const collection = await getFilesCollection();
+      let affectedCount = 0;
+      let ownerId = "";
+
+      if (!collection) {
+        ids.forEach(id => {
+          const file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            file.isDeleted = true;
+            file.deletedAt = new Date().toISOString();
+            affectedCount++;
+            ownerId = file.ownerId;
+          }
+        });
+      } else {
+        const nonMemIds = ids.filter(id => !id.startsWith("mem_")).map(id => new ObjectId(id));
+        const memIds = ids.filter(id => id.startsWith("mem_"));
+
+        memIds.forEach(id => {
+          const file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            file.isDeleted = true;
+            file.deletedAt = new Date().toISOString();
+            affectedCount++;
+            ownerId = file.ownerId;
+          }
+        });
+
+        if (nonMemIds.length > 0) {
+          const sample = await collection.findOne({ _id: nonMemIds[0] });
+          if (sample) ownerId = sample.ownerId;
+
+          const resDb = await collection.updateMany(
+            { _id: { $in: nonMemIds } },
+            { $set: { isDeleted: true, deletedAt: new Date() } }
+          );
+          affectedCount += resDb.modifiedCount;
+        }
+      }
+
+      if (ownerId) {
+        await logActivity(
+          ownerId,
+          "DELETE",
+          "Bulk Trash",
+          `Moved ${affectedCount} items to Secure Trash (scheduled for auto-purge in 30 days).`
+        );
+      }
+      res.json({ success: true, count: affectedCount });
+    } catch (err: any) {
+      console.error("MongoDB bulk soft delete error:", err);
+      res.status(500).json({ error: err.message || "Failed to complete bulk soft delete." });
+    }
+  });
+
+  // POST: Restore multiple files from trash (bulk-restore)
+  app.post("/api/files/bulk-restore", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids array is required and must not be empty" });
+      }
+      const collection = await getFilesCollection();
+      let affectedCount = 0;
+      let ownerId = "";
+
+      if (!collection) {
+        ids.forEach(id => {
+          const file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            file.isDeleted = false;
+            file.deletedAt = null;
+            affectedCount++;
+            ownerId = file.ownerId;
+          }
+        });
+      } else {
+        const nonMemIds = ids.filter(id => !id.startsWith("mem_")).map(id => new ObjectId(id));
+        const memIds = ids.filter(id => id.startsWith("mem_"));
+
+        memIds.forEach(id => {
+          const file = inMemoryFiles.find(f => f.id === id);
+          if (file) {
+            file.isDeleted = false;
+            file.deletedAt = null;
+            affectedCount++;
+            ownerId = file.ownerId;
+          }
+        });
+
+        if (nonMemIds.length > 0) {
+          const sample = await collection.findOne({ _id: nonMemIds[0] });
+          if (sample) ownerId = sample.ownerId;
+
+          const resDb = await collection.updateMany(
+            { _id: { $in: nonMemIds } },
+            { $set: { isDeleted: false, deletedAt: null } }
+          );
+          affectedCount += resDb.modifiedCount;
+        }
+      }
+
+      if (ownerId) {
+        await logActivity(
+          ownerId,
+          "RESTORE",
+          "Bulk Restore",
+          `Successfully restored ${affectedCount} items from Secure Trash to active directories.`
+        );
+      }
+      res.json({ success: true, count: affectedCount });
+    } catch (err: any) {
+      console.error("MongoDB bulk restore error:", err);
+      res.status(500).json({ error: err.message || "Failed to complete bulk restore." });
     }
   });
 

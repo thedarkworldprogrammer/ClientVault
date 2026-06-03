@@ -42,6 +42,11 @@ import {
   FolderOpen,
   Folder,
   FolderPlus,
+  FolderArchive,
+  FolderCode,
+  FolderLock,
+  FolderSync,
+  FolderHeart,
   Settings,
   X,
   Eye,
@@ -52,6 +57,7 @@ import {
   Link,
   Copy,
   RotateCw,
+  RotateCcw,
   ZoomIn,
   ZoomOut,
   Maximize2,
@@ -129,12 +135,151 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [generatingShareLink, setGeneratingShareLink] = useState<boolean>(false);
   const [copySuccess, setCopySuccess] = useState<boolean>(false);
   
+  // Right-Click Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    file: ClientFile;
+  } | null>(null);
+
+  // Dedicated Share Modal State
+  const [shareModalFile, setShareModalFile] = useState<ClientFile | null>(null);
+  const [shareModalExpiresMin, setShareModalExpiresMin] = useState<number>(60);
+  const [shareModalGeneratedLink, setShareModalGeneratedLink] = useState<string | null>(null);
+  const [shareModalGenerating, setShareModalGenerating] = useState<boolean>(false);
+  const [shareModalCopySuccess, setShareModalCopySuccess] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      if (contextMenu) {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    window.addEventListener('contextmenu', handleOutsideClick);
+    window.addEventListener('scroll', handleOutsideClick, true);
+    return () => {
+      window.removeEventListener('click', handleOutsideClick);
+      window.removeEventListener('contextmenu', handleOutsideClick);
+      window.removeEventListener('scroll', handleOutsideClick, true);
+    };
+  }, [contextMenu]);
+
+  const handleContextMenu = (e: React.MouseEvent, file: ClientFile) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      file,
+    });
+  };
+
+  const handleGenerateShareModalLink = async () => {
+    if (!user || !shareModalFile) return;
+    setShareModalGenerating(true);
+    try {
+      const response = await fetch('/api/shares', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileId: shareModalFile.id,
+          expiresInMinutes: shareModalExpiresMin,
+          ownerId: user.uid
+        })
+      });
+      if (!response.ok) {
+        throw new Error('Unable to register secure Direct Link credentials.');
+      }
+      const data = await response.json();
+      const directUrl = `${window.location.origin}?share=${data.token}`;
+      setShareModalGeneratedLink(directUrl);
+      fetchActivities(); // update real-time logs instantly
+    } catch (err: any) {
+      console.error('Share modal link creation failure:', err);
+    } finally {
+      setShareModalGenerating(false);
+    }
+  };
+  
   // Pre-upload Preview Modal State
   const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
   const [pendingUploadPreviewUrl, setPendingUploadPreviewUrl] = useState<string | null>(null);
   const [pendingFileTags, setPendingFileTags] = useState<string[]>([]);
   const [isPreUploadPreviewOpen, setIsPreUploadPreviewOpen] = useState(false);
   const [pendingUploadFileName, setPendingUploadFileName] = useState('');
+  
+  // Custom Folder Creation State
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [folderCreationError, setFolderCreationError] = useState<string | null>(null);
+  const [createdFolders, setCreatedFolders] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (user?.uid) {
+      try {
+        const saved = localStorage.getItem(`clientvault-folders-${user.uid}`);
+        if (saved) {
+          setCreatedFolders(JSON.parse(saved));
+        } else {
+          setCreatedFolders([]);
+        }
+      } catch (err) {
+        console.error('Failed to load empty folders:', err);
+      }
+    }
+  }, [user?.uid]);
+
+  const saveCreatedFolders = (folders: string[]) => {
+    setCreatedFolders(folders);
+    if (user?.uid) {
+      try {
+        localStorage.setItem(`clientvault-folders-${user.uid}`, JSON.stringify(folders));
+      } catch (err) {
+        console.error('Failed to save empty folders:', err);
+      }
+    }
+  };
+
+  const handleCreateFolder = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanName = newFolderName.trim();
+    if (!cleanName) {
+      setFolderCreationError('Folder name cannot be blank.');
+      return;
+    }
+    if (/[\\:*?"<>|]/.test(cleanName)) {
+      setFolderCreationError('Folder name containing special characters such as \\ : * ? " < > | is not allowed.');
+      return;
+    }
+    if (cleanName.includes('/')) {
+      setFolderCreationError('Nested subdirectories cannot be created with forward slashes.');
+      return;
+    }
+
+    const fullPath = currentFolder ? `${currentFolder}/${cleanName}` : cleanName;
+
+    const existsInFiles = files.some(file => {
+      const f = file.folder || '';
+      return f === fullPath || f.startsWith(fullPath + '/');
+    });
+
+    const existsInCreated = createdFolders.some(f => f === fullPath || f.startsWith(fullPath + '/'));
+
+    if (existsInFiles || existsInCreated) {
+      setFolderCreationError(`A folder named "${cleanName}" already exists in this directory.`);
+      return;
+    }
+
+    const updatedFolders = [...createdFolders, fullPath];
+    saveCreatedFolders(updatedFolders);
+    setShowCreateFolderModal(false);
+    
+    window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+      detail: { type: 'success', message: `Empty directory "${cleanName}" created successfully.` }
+    }));
+  };
   
   // Sorting State
   const [sortField, setSortField] = useState<'name' | 'size' | 'uploadedAt'>('uploadedAt');
@@ -935,47 +1080,104 @@ export const Dashboard: React.FC<DashboardProps> = ({
     // Set fileToDelete to null to close modal before processing
     setFileToDelete(null);
 
+    const isInTrash = currentFolder === 'Trash';
+    const url = isInTrash ? `/api/files/${fileId}` : `/api/files/${fileId}/trash`;
+    const method = isInTrash ? 'DELETE' : 'POST';
+
     try {
-      const response = await fetch(`/api/files/${fileId}`, {
-        method: 'DELETE'
-      });
+      const response = await fetch(url, { method });
       if (!response.ok) {
-        throw new Error('Server rejected secure deletion of the selected file.');
+        throw new Error(isInTrash ? 'Server rejected permanent deletion of file.' : 'Server rejected moving file to trash.');
       }
-      setUploadSuccess(`"${fileName}" deleted securely from MongoDB Atlas.`);
+      setUploadSuccess(
+        isInTrash 
+          ? `"${fileName}" has been permanently purged.` 
+          : `"${fileName}" moved to Secure Trash container.`
+      );
       fetchFiles(); // Refresh file list
       fetchActivities(); // Refresh activities stream
       setTimeout(() => setUploadSuccess(null), 4000);
     } catch (err: any) {
-      console.error('Purging MongoDB Atlas item failed:', err);
-      setUploadError(err.message || 'Failed to delete custom item from storage system.');
+      console.error('File custom operation failed:', err);
+      setUploadError(err.message || 'Failed to complete requested action.');
     }
   };
 
-  // Perform batch document purging
+  // Perform single restore
+  const executeRestore = async (fileId: string, fileName: string) => {
+    try {
+      const response = await fetch(`/api/files/${fileId}/restore`, { method: 'POST' });
+      if (!response.ok) {
+        throw new Error('Server rejected file restoration request.');
+      }
+      setUploadSuccess(`"${fileName}" restored successfully to active files.`);
+      fetchFiles();
+      fetchActivities();
+      setTimeout(() => setUploadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Restore item failed:', err);
+      setUploadError(err.message || 'Failed to restore file.');
+    }
+  };
+
+  // Perform batch document purging or soft deleting
   const executeBulkDelete = async () => {
     if (selectedFileIds.length === 0) return;
     setBulkDeleteConfirm(false);
     setDeletingBulk(true);
     
+    const isInTrash = currentFolder === 'Trash';
+    const url = isInTrash ? '/api/files/bulk-delete' : '/api/files/bulk-trash';
+
     try {
-      const response = await fetch('/api/files/bulk-delete', {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selectedFileIds })
       });
       if (!response.ok) {
-        throw new Error('Server rejected bulk secure deletion.');
+        throw new Error(isInTrash ? 'Server rejected bulk permanent deletion.' : 'Server rejected bulk soft deletion.');
       }
       const data = await response.json();
-      setUploadSuccess(`Permanently shredded and purged ${data.deletedCount || selectedFileIds.length} files securely.`);
+      setUploadSuccess(
+        isInTrash
+          ? `Permanently shredded and purged ${data.deletedCount || selectedFileIds.length} files securely.`
+          : `Moved ${data.count || selectedFileIds.length} files to Secure Trash container successfully.`
+      );
       setSelectedFileIds([]); // Clear selection
       fetchFiles(); // Refresh file list
       fetchActivities(); // Refresh activities stream
       setTimeout(() => setUploadSuccess(null), 4000);
     } catch (err: any) {
-      console.error('Purging multiple items failed:', err);
+      console.error('Bulk deletion failed:', err);
       setUploadError(err.message || 'Failed to complete bulk deletion.');
+    } finally {
+      setDeletingBulk(false);
+    }
+  };
+
+  // Perform batch restore
+  const executeBulkRestore = async () => {
+    if (selectedFileIds.length === 0) return;
+    setDeletingBulk(true);
+    try {
+      const response = await fetch('/api/files/bulk-restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedFileIds })
+      });
+      if (!response.ok) {
+        throw new Error('Server rejected bulk restore operation.');
+      }
+      const data = await response.json();
+      setUploadSuccess(`Successfully restored ${data.count || selectedFileIds.length} items to active storage.`);
+      setSelectedFileIds([]);
+      fetchFiles();
+      fetchActivities();
+      setTimeout(() => setUploadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Bulk restore failed:', err);
+      setUploadError(err.message || 'Failed to complete bulk restore.');
     } finally {
       setDeletingBulk(false);
     }
@@ -1365,14 +1567,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const folderSet = new Set<string>();
     
     files.forEach(file => {
+      if (file.isDeleted) return; // Skip deleted files for active directories
       const f = file.folder || '';
       if (!f) return;
       
       if (currentFolder === null) {
         // At root, take the first segment
         const segment = f.split('/')[0];
-        folderSet.add(segment);
-      } else {
+        if (segment !== 'Trash') {
+          folderSet.add(segment);
+        }
+      } else if (currentFolder !== 'Trash') {
+        // Inside currentFolder, check if f starts with `currentFolder/`
+        const prefix = currentFolder + '/';
+        if (f.startsWith(prefix)) {
+          const suffix = f.substring(prefix.length);
+          const segment = suffix.split('/')[0];
+          folderSet.add(segment);
+        }
+      }
+    });
+
+    createdFolders.forEach(f => {
+      if (!f) return;
+      
+      if (currentFolder === null) {
+        // At root, take the first segment
+        const segment = f.split('/')[0];
+        if (segment !== 'Trash') {
+          folderSet.add(segment);
+        }
+      } else if (currentFolder !== 'Trash') {
         // Inside currentFolder, check if f starts with `currentFolder/`
         const prefix = currentFolder + '/';
         if (f.startsWith(prefix)) {
@@ -1384,19 +1609,175 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
     
     return Array.from(folderSet).sort((a, b) => a.localeCompare(b));
-  }, [files, currentFolder]);
+  }, [files, currentFolder, createdFolders]);
 
   // Helper stats for a directory
   const getFolderStats = (folderName: string) => {
     const fullPath = currentFolder ? `${currentFolder}/${folderName}` : folderName;
-    const folderFiles = files.filter(f => f.folder === fullPath || (f.folder && f.folder.startsWith(fullPath + '/')));
+    const folderFiles = files.filter(f => !f.isDeleted && (f.folder === fullPath || (f.folder && f.folder.startsWith(fullPath + '/'))));
     const count = folderFiles.length;
     const totalSize = folderFiles.reduce((acc, f) => acc + f.size, 0);
     return { count, totalSize };
   };
 
+  // Dynamically determines the folder-specific icon, styling, badge class, and label metadata based on categorizing key phrases, selection status, and file containment levels
+  const getFolderIconAndStyles = (folderName: string, isSelected: boolean, hasFiles: boolean) => {
+    const nameLower = folderName.toLowerCase().trim();
+    
+    // 1. Definition of custom categories & icon assignments
+    let iconType = 'default';
+    if (/(?:src|code|dev|proj|git|build|bin|lib|config|script|program|tech|rust|python|node|java|html|css|js|ts)/i.test(nameLower)) {
+      iconType = 'code';
+    } else if (/(?:secret|private|secure|key|lock|auth|cert|admin|confidential|vault|pass|crypt|safe|pki|ssh)/i.test(nameLower)) {
+      iconType = 'lock';
+    } else if (/(?:zip|rar|archive|backup|tar|gz|dist|old|legacy|history|pack|dump)/i.test(nameLower)) {
+      iconType = 'archive';
+    } else if (/(?:sync|cloud|temp|download|upload|transfer|shared|pipeline)/i.test(nameLower)) {
+      iconType = 'sync';
+    } else if (/(?:fave|favorite|heart|star|love|personal|family|home|finance|tax|hobby|pet|wishlist)/i.test(nameLower)) {
+      iconType = 'heart';
+    }
+
+    // 2. Select appropriate Icon component and dynamic Tailwind CSS classes
+    let IconComponent = Folder;
+    let containerClass = '';
+    let iconClass = '';
+    let badgeClass = '';
+    let label = 'Secure Vault Directory';
+
+    switch (iconType) {
+      case 'code':
+        IconComponent = FolderCode;
+        label = 'Development Vault';
+        badgeClass = 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-400 border border-indigo-200/40 dark:border-indigo-900/30';
+        if (isSelected) {
+          containerClass = 'bg-indigo-600 dark:bg-indigo-600 border-indigo-700 shadow-sm shadow-indigo-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          containerClass = 'bg-indigo-50/90 dark:bg-indigo-950/45 border-indigo-250 dark:border-indigo-900/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-950/60 shadow-3xs';
+          iconClass = 'text-indigo-600 dark:text-indigo-450 fill-indigo-500/10';
+        } else {
+          containerClass = 'bg-indigo-50/30 dark:bg-indigo-950/10 border-indigo-150 dark:border-indigo-900/20 border-dashed opacity-75';
+          iconClass = 'text-indigo-450 dark:text-indigo-500/50';
+        }
+        break;
+
+      case 'lock':
+        IconComponent = FolderLock;
+        label = 'Confidential Vault';
+        badgeClass = 'bg-rose-50 dark:bg-rose-950/40 text-rose-850 dark:text-rose-400 border border-rose-200/40 dark:border-rose-900/30';
+        if (isSelected) {
+          containerClass = 'bg-rose-600 dark:bg-rose-600 border-rose-700 shadow-sm shadow-rose-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          containerClass = 'bg-rose-50/90 dark:bg-rose-950/45 border-rose-250 dark:border-rose-900/40 hover:bg-rose-100/70 dark:hover:bg-rose-950/60 shadow-3xs';
+          iconClass = 'text-rose-600 dark:text-rose-450 fill-rose-500/10';
+        } else {
+          containerClass = 'bg-rose-50/30 dark:bg-rose-950/10 border-rose-150 dark:border-rose-900/20 border-dashed opacity-75';
+          iconClass = 'text-rose-450 dark:text-rose-500/50';
+        }
+        break;
+
+      case 'archive':
+        IconComponent = FolderArchive;
+        label = 'Secure Archive';
+        badgeClass = 'bg-amber-50 dark:bg-amber-950/40 text-amber-850 dark:text-amber-400 border border-amber-200/40 dark:border-amber-900/30';
+        if (isSelected) {
+          containerClass = 'bg-amber-600 dark:bg-amber-600 border-amber-700 shadow-sm shadow-amber-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          containerClass = 'bg-amber-50/90 dark:bg-amber-950/45 border-amber-250 dark:border-amber-900/40 hover:bg-amber-100/70 dark:hover:bg-amber-950/60 shadow-3xs';
+          iconClass = 'text-amber-600 dark:text-amber-450 fill-amber-500/10';
+        } else {
+          containerClass = 'bg-amber-50/30 dark:bg-amber-950/10 border-amber-150 dark:border-amber-900/20 border-dashed opacity-75';
+          iconClass = 'text-amber-450 dark:text-amber-500/50';
+        }
+        break;
+
+      case 'sync':
+        IconComponent = FolderSync;
+        label = 'Synchronized Pipeline';
+        badgeClass = 'bg-cyan-50 dark:bg-cyan-950/40 text-cyan-850 dark:text-cyan-400 border border-cyan-200/40 dark:border-cyan-900/30';
+        if (isSelected) {
+          containerClass = 'bg-cyan-600 dark:bg-cyan-600 border-cyan-700 shadow-sm shadow-cyan-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          containerClass = 'bg-cyan-50/90 dark:bg-cyan-950/45 border-cyan-250 dark:border-cyan-900/40 hover:bg-cyan-100/70 dark:hover:bg-cyan-950/60 shadow-3xs';
+          iconClass = 'text-cyan-600 dark:text-cyan-450 fill-cyan-500/10';
+        } else {
+          containerClass = 'bg-cyan-50/30 dark:bg-cyan-950/10 border-cyan-150 dark:border-cyan-900/20 border-dashed opacity-75';
+          iconClass = 'text-cyan-450 dark:text-cyan-500/50';
+        }
+        break;
+
+      case 'heart':
+        IconComponent = FolderHeart;
+        label = 'Personal Sanctuary';
+        badgeClass = 'bg-pink-50 dark:bg-pink-950/40 text-pink-850 dark:text-pink-400 border border-pink-205/40 dark:border-pink-900/30';
+        if (isSelected) {
+          containerClass = 'bg-pink-600 dark:bg-pink-600 border-pink-700 shadow-sm shadow-pink-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          containerClass = 'bg-pink-50/90 dark:bg-pink-950/45 border-pink-250 dark:border-pink-900/40 hover:bg-pink-100/70 dark:hover:bg-pink-950/60 shadow-3xs';
+          iconClass = 'text-pink-600 dark:text-pink-450 fill-pink-500/10';
+        } else {
+          containerClass = 'bg-pink-50/30 dark:bg-pink-950/10 border-pink-150 dark:border-pink-900/20 border-dashed opacity-75';
+          iconClass = 'text-pink-450 dark:text-pink-500/50';
+        }
+        break;
+
+      default:
+        // Generic fallback - toggle between FolderOpen and Folder
+        if (isSelected) {
+          IconComponent = FolderOpen;
+          label = 'Active Directory';
+          badgeClass = 'bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-400 border border-blue-200/40 dark:border-blue-900/30';
+          containerClass = 'bg-blue-600 dark:bg-blue-600 border-blue-700 shadow-sm shadow-blue-500/30 scale-105';
+          iconClass = 'text-white fill-white/10 animate-bounce-subtle';
+        } else if (hasFiles) {
+          IconComponent = FolderOpen;
+          label = 'Secure Directory';
+          badgeClass = 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-400 border border-amber-200/40 dark:border-amber-900/30';
+          containerClass = 'bg-amber-50/90 dark:bg-amber-950/45 border-amber-200 dark:border-amber-900/45 hover:bg-amber-100/70 dark:hover:bg-amber-950/60 shadow-3xs';
+          iconClass = 'text-amber-550 dark:text-amber-400 fill-amber-500/10';
+        } else {
+          IconComponent = Folder;
+          label = 'New Empty Directory';
+          badgeClass = 'bg-slate-55 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 border border-slate-200/40 dark:border-slate-800/60';
+          containerClass = 'bg-slate-50 dark:bg-slate-900/30 border-slate-200/60 dark:border-slate-800/60 border-dashed opacity-75';
+          iconClass = 'text-slate-400 dark:text-slate-550';
+        }
+        break;
+    }
+
+    return { IconComponent, containerClass, iconClass, badgeClass, label };
+  };
+
+  const getDaysRemaining = (deletedAtStr: string | null | Date) => {
+    if (!deletedAtStr) return 30;
+    const deletedAt = new Date(deletedAtStr);
+    const diffTime = Date.now() - deletedAt.getTime();
+    const diffDays = diffTime / (1000 * 60 * 60 * 24);
+    const remaining = Math.max(0, Math.ceil(30 - diffDays));
+    return remaining;
+  };
+
   // Filter list records
   const filteredFiles = files.filter(file => {
+    if (currentFolder === 'Trash') {
+      if (!file.isDeleted) return false;
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch = !q || 
+        file.name.toLowerCase().includes(q) ||
+        (file.type && file.type.toLowerCase().includes(q)) ||
+        (file.tags && file.tags.some(tag => tag.toLowerCase().includes(q)));
+      const matchesTag = !selectedTagFilter || (file.tags && file.tags.includes(selectedTagFilter));
+      return matchesSearch && matchesTag;
+    }
+
+    // Exclude soft-deleted files from active folders
+    if (file.isDeleted) return false;
+
     const hasSearchQuery = searchQuery.trim() !== '';
     const fileFolder = file.folder || null;
     const matchesFolder = hasSearchQuery || (fileFolder === currentFolder);
@@ -1418,8 +1799,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     } else if (sortField === 'size') {
       comparison = a.size - b.size;
     } else if (sortField === 'uploadedAt') {
-      const timeA = a.uploadedAt instanceof Date ? a.uploadedAt.getTime() : new Date(a.uploadedAt).getTime();
-      const timeB = b.uploadedAt instanceof Date ? b.uploadedAt.getTime() : new Date(b.uploadedAt).getTime();
+      const timeA = currentFolder === 'Trash' && a.deletedAt ? new Date(a.deletedAt).getTime() : (a.uploadedAt instanceof Date ? a.uploadedAt.getTime() : new Date(a.uploadedAt).getTime());
+      const timeB = currentFolder === 'Trash' && b.deletedAt ? new Date(b.deletedAt).getTime() : (b.uploadedAt instanceof Date ? b.uploadedAt.getTime() : new Date(b.uploadedAt).getTime());
       comparison = timeA - timeB;
     }
     return sortOrder === 'asc' ? comparison : -comparison;
@@ -1474,19 +1855,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <span>Upload Files Securely</span>
               </h3>
 
-              <div
-                id="file-dropzone"
-                onDragEnter={handleDrag}
-                onDragOver={handleDrag}
-                onDragLeave={handleDrag}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center transition-all cursor-pointer text-center relative ${
-                  dragActive 
-                    ? 'border-blue-500 bg-blue-100/30 text-blue-600 shadow-xs' 
-                    : 'border-blue-200 bg-blue-50/50 hover:bg-blue-50 text-slate-500'
-                }`}
-              >
+              {currentFolder === 'Trash' ? (
+                <div className="border border-red-200/40 bg-red-500/5 dark:bg-red-950/5 dark:border-red-900/30 rounded-2xl p-8 text-center">
+                  <Trash2 className="w-8 h-8 text-red-500/70 mx-auto mb-3 opacity-60" />
+                  <p className="text-xs font-black text-red-700 dark:text-red-400">Vault Uploads Disabled in Trash</p>
+                  <p className="text-[10.5px] text-red-400/70 mt-1.5 leading-relaxed">Please select an active directory folder or go back to Vault root to upload new file packages.</p>
+                </div>
+              ) : (
+                <div
+                  id="file-dropzone"
+                  onDragEnter={handleDrag}
+                  onDragOver={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center transition-all cursor-pointer text-center relative ${
+                    dragActive 
+                      ? 'border-blue-500 bg-blue-100/30 text-blue-600 shadow-xs' 
+                      : 'border-blue-200 bg-blue-50/50 hover:bg-blue-50 text-slate-500'
+                  }`}
+                >
                 <input
                   id="file-input-raw"
                   ref={fileInputRef}
@@ -1590,6 +1978,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 )}
               </div>
+            )}
 
               {/* Status Alerting */}
               {uploadError && (
@@ -1645,6 +2034,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         whileHover={{ scale: 1.025, y: -4 }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => setSelectedPreviewFile(file)}
+                        onContextMenu={(e) => handleContextMenu(e, file)}
                         className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-500/40 dark:hover:border-blue-500/40 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between h-36 font-sans group relative overflow-hidden"
                       >
                         {/* Background Subtle Gradient Glow */}
@@ -1856,22 +2246,92 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   )}
                 </div>
 
-                {currentFolder && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const segments = currentFolder.split('/');
-                      if (segments.length === 1) {
-                        navigateToFolder(null);
-                      } else {
-                        navigateToFolder(segments.slice(0, -1).join('/'));
-                      }
-                    }}
-                    className="flex items-center space-x-1 text-[10.5px] font-black text-slate-600 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-500 bg-slate-150 hover:bg-slate-200/65 dark:bg-slate-800 dark:hover:bg-slate-705 px-2.5 py-1 rounded-md transition cursor-pointer"
-                  >
-                    <span>← Go Up</span>
-                  </button>
-                )}
+                <div className="flex items-center space-x-2 shrink-0">
+                  {currentFolder === 'Trash' ? (
+                    <>
+                      {selectedFileIds.length > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={executeBulkRestore}
+                            className="flex items-center space-x-1 py-1 px-2.5 rounded-md text-[10.5px] font-bold text-emerald-600 dark:text-emerald-400 hover:text-white dark:hover:text-emerald-200 hover:bg-emerald-600 dark:hover:bg-emerald-900 border border-emerald-500/20 bg-emerald-500/5 dark:bg-emerald-950/20 transition cursor-pointer"
+                            title="Restore all selected items to active vault"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Restore Selected ({selectedFileIds.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkDeleteConfirm(true)}
+                            className="flex items-center space-x-1 py-1 px-2.5 rounded-md text-[10.5px] font-bold text-red-650 dark:text-red-400 hover:text-white dark:hover:text-red-200 hover:bg-red-600 dark:hover:bg-red-900 border border-red-500/20 bg-red-500/5 dark:bg-red-950/20 transition cursor-pointer"
+                            title="Permanently remove all selected items"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Permanently Delete Selected ({selectedFileIds.length})</span>
+                          </button>
+                        </>
+                      ) : (
+                        files.filter(f => f.isDeleted).length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const trashedIds = files.filter(f => f.isDeleted).map(f => f.id);
+                              setSelectedFileIds(trashedIds);
+                              setBulkDeleteConfirm(true);
+                            }}
+                            className="flex items-center space-x-1 py-1 px-2.5 rounded-md text-[10.5px] font-bold text-red-600 bg-red-50 dark:bg-red-950/20 hover:bg-red-600 hover:text-white dark:text-red-400 dark:hover:bg-red-900 border border-red-550/20 transition cursor-pointer font-extrabold"
+                            title="Permanently erase all files currently in the trash"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Empty Trash Bin</span>
+                          </button>
+                        )
+                      )}
+                      
+                      <button
+                        type="button"
+                        onClick={() => navigateToFolder(null)}
+                        className="flex items-center space-x-1 text-[10.5px] font-black text-slate-800 hover:text-blue-600 dark:text-slate-305 dark:hover:text-blue-500 bg-slate-150 hover:bg-slate-205 dark:bg-slate-800 dark:hover:bg-slate-705 px-2.5 py-1 rounded-md transition cursor-pointer font-bold"
+                      >
+                        <span>← Back to Vault</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        id="btn-create-folder"
+                        onClick={() => {
+                          setNewFolderName('');
+                          setFolderCreationError(null);
+                          setShowCreateFolderModal(true);
+                        }}
+                        className="flex items-center space-x-1 py-1 px-2.5 rounded-md text-[10.5px] font-bold text-blue-600 dark:text-blue-400 hover:text-white dark:hover:text-blue-200 hover:bg-blue-600 dark:hover:bg-blue-900 border border-blue-500/20 bg-blue-500/5 dark:bg-blue-950/20 transition cursor-pointer"
+                        title="Create a new folder in this directory"
+                      >
+                        <FolderPlus className="w-3.5 h-3.5" />
+                        <span>Create New Folder</span>
+                      </button>
+
+                      {currentFolder && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const segments = currentFolder.split('/');
+                            if (segments.length === 1) {
+                              navigateToFolder(null);
+                            } else {
+                              navigateToFolder(segments.slice(0, -1).join('/'));
+                            }
+                          }}
+                          className="flex items-center space-x-1 text-[10.5px] font-black text-slate-600 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-500 bg-slate-150 hover:bg-slate-200/65 dark:bg-slate-800 dark:hover:bg-slate-705 px-2.5 py-1 rounded-md transition cursor-pointer"
+                        >
+                          <span>← Go Up</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
 
               {/* Table list */}
@@ -1937,10 +2397,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           id="th-sort-uploadedAt"
                           onClick={() => handleSort('uploadedAt')}
                           className="px-6 py-3 font-semibold cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 select-none transition-colors rounded-lg group"
-                          title="Click to sort by upload date"
+                          title={currentFolder === 'Trash' ? 'Click to sort by deletion date' : 'Click to sort by upload date'}
                         >
                           <div className="flex items-center space-x-1">
-                            <span>Upload Date</span>
+                            <span>{currentFolder === 'Trash' ? 'Deletion Age (Retention)' : 'Upload Date'}</span>
                             {sortField === 'uploadedAt' ? (
                               sortOrder === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-blue-600 dark:text-blue-500" /> : <ArrowDown className="w-3.5 h-3.5 text-blue-600 dark:text-blue-500" />
                             ) : (
@@ -1956,6 +2416,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       {searchQuery.trim() === '' && virtualFolders.map((folderName) => {
                         const { count, totalSize } = getFolderStats(folderName);
                         const folderPath = currentFolder ? `${currentFolder}/${folderName}` : folderName;
+                        const { IconComponent, containerClass, iconClass, badgeClass, label: folderLabel } = getFolderIconAndStyles(folderName, false, count > 0);
                         return (
                           <tr 
                             key={`folder-${folderName}`}
@@ -1965,25 +2426,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             title={`Click to navigate into folder: ${folderName}`}
                           >
                             <td className="pl-6 pr-2 py-4 w-12" onClick={(e) => e.stopPropagation()}>
-                              <div className="w-4 h-4 rounded border border-slate-200/50 dark:border-slate-800 flex items-center justify-center bg-slate-100 dark:bg-slate-950 text-slate-400 dark:text-slate-600 pointer-events-none select-none">
-                                <Folder className="w-2.5 h-2.5" />
+                              <div className={`w-6 h-6 rounded-md flex items-center justify-center transition-all duration-300 pointer-events-none select-none border ${containerClass}`}>
+                                <IconComponent className={`w-3.5 h-3.5 ${iconClass}`} />
                               </div>
                             </td>
                             <td className="px-4 py-4 flex items-center font-bold text-slate-850">
                               <div className="flex items-center space-x-3 max-w-sm sm:max-w-md">
-                                <div className="w-8.5 h-8.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 flex items-center justify-center shrink-0 shadow-3xs group-hover:bg-amber-500/10 group-hover:border-amber-500/30 transition-all">
-                                  <Folder className="w-4 h-4 text-amber-500 dark:text-amber-400 fill-amber-500/10" />
+                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all duration-300 shadow-3xs group-hover:scale-105 ${containerClass}`}>
+                                  <IconComponent className={`w-4.5 h-4.5 ${iconClass}`} />
                                 </div>
-                                <span className="truncate text-slate-700 dark:text-slate-250 font-bold group-hover:text-amber-600 dark:group-hover:text-amber-400 transition" title={folderName}>
-                                  {folderName}
-                                </span>
+                                <div className="flex flex-col text-left">
+                                  <span className="truncate text-slate-700 dark:text-slate-250 font-bold group-hover:text-blue-600 dark:group-hover:text-amber-500 transition" title={folderName}>
+                                    {folderName}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                                    {folderLabel}
+                                  </span>
+                                </div>
                               </div>
                             </td>
                             <td className="px-6 py-4 font-mono text-slate-400 text-xs">
                               {count > 0 ? formatBytes(totalSize) : '0 Bytes'}
                             </td>
                             <td className="px-6 py-4 text-slate-500 dark:text-slate-400 hidden md:table-cell max-w-xs truncate">
-                              <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-md border border-amber-200/40 dark:border-amber-900/30 font-mono">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md font-mono ${badgeClass}`}>
                                 Folder ({count} {count === 1 ? 'item' : 'items'})
                               </span>
                             </td>
@@ -1993,7 +2459,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <td className="px-6 py-4 text-slate-400 text-xs">
                               <span className="text-slate-350 dark:text-slate-700 font-mono">—</span>
                             </td>
-                            <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                            <td className="px-6 py-4 text-right flex items-center justify-end space-x-1.5" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
                                 onClick={() => navigateToFolder(folderPath)}
@@ -2001,10 +2467,152 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               >
                                 View folder
                               </button>
+                             
+                              {createdFolders.some(f => f === folderPath) && count === 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = createdFolders.filter(f => f !== folderPath);
+                                    saveCreatedFolders(updated);
+                                    window.dispatchEvent(new CustomEvent('secure-upload-notification', {
+                                      detail: { type: 'success', message: `Empty directory "${folderName}" deleted successfully.` }
+                                    }));
+                                  }}
+                                  className="p-1 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-805 rounded-md transition"
+                                  title="Delete empty directory"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </td>
                           </tr>
                         );
                       })}
+
+                      {/* Special system folder: Trash */}
+                      {currentFolder === null && searchQuery.trim() === '' && (
+                        <tr 
+                          key="system-folder-trash"
+                          id="folder-row-trash"
+                          className="bg-red-50/10 dark:bg-red-950/5 hover:bg-red-50/20 dark:hover:bg-red-950/10 transition-colors cursor-pointer group border-l-2 border-red-500/60"
+                          onClick={() => navigateToFolder('Trash')}
+                          title="Click to view Secure Trash Bin"
+                        >
+                          <td className="pl-6 pr-2 py-4 w-12" onClick={(e) => e.stopPropagation()}>
+                            <div className="w-4 h-4 rounded border border-red-200/50 dark:border-red-900/30 flex items-center justify-center bg-red-100/10 dark:bg-red-950/20 text-red-500 pointer-events-none select-none">
+                              <Trash2 className="w-2.5 h-2.5" />
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 flex items-center font-bold text-red-700 dark:text-red-400">
+                            <div className="flex items-center space-x-3 max-w-sm sm:max-w-md">
+                              <div className="w-8.5 h-8.5 rounded-xl bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/40 flex items-center justify-center shrink-0 shadow-3xs group-hover:bg-red-500/10 group-hover:border-red-500/30 transition-all">
+                                <Trash2 className="w-4 h-4 text-red-505 dark:text-red-450 fill-red-500/10" />
+                              </div>
+                              <span className="truncate text-red-700 dark:text-red-400 font-extrabold group-hover:text-red-600 transition">
+                                Trash Bin
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 font-mono text-red-400/80 text-xs">
+                            {(() => {
+                              const trashFiles = files.filter(f => f.isDeleted);
+                              const totalTrashSize = trashFiles.reduce((acc, f) => acc + f.size, 0);
+                              return trashFiles.length > 0 ? formatBytes(totalTrashSize) : '0 Bytes';
+                            })()}
+                          </td>
+                          <td className="px-6 py-4 text-red-500/80 hidden md:table-cell max-w-xs truncate">
+                            <span className="bg-red-50/80 dark:bg-red-950/40 text-red-800 dark:text-red-400 text-[10px] font-extrabold px-2 py-0.5 rounded-md border border-red-200/40 dark:border-red-900/30 font-mono">
+                              System Trash ({files.filter(f => f.isDeleted).length} {files.filter(f => f.isDeleted).length === 1 ? 'item' : 'items'})
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 hidden sm:table-cell">
+                            <span className="text-[10px] text-red-400/70 italic font-medium">30-day Retention policy</span>
+                          </td>
+                          <td className="px-6 py-4 text-red-400 text-xs">
+                            <span className="text-red-300 dark:text-red-800 font-mono">—</span>
+                          </td>
+                          <td className="px-6 py-4 text-right flex items-center justify-end space-x-1.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => navigateToFolder('Trash')}
+                              className="p-1 px-2.5 py-1 text-[10px] font-bold text-red-600 hover:text-white dark:text-red-405 hover:bg-red-500 bg-red-100/10 dark:bg-red-950/25 border border-red-200/30 dark:border-red-900/20 rounded-md transition cursor-pointer font-bold"
+                            >
+                              Explore Trash
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+
+                      {uploading && pendingUploadFile && (
+                        <tr className="animate-pulse bg-blue-50/15 dark:bg-blue-950/10 border-l-2 border-blue-500/80">
+                          <td className="pl-6 pr-2 py-4 w-12">
+                            <div className="w-5 h-5 rounded border border-blue-400/40 flex items-center justify-center bg-blue-50 dark:bg-blue-950 text-blue-500 shadow-3xs">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 flex items-center font-medium">
+                            <div className="flex items-center space-x-3 max-w-sm sm:max-w-md">
+                              {(() => {
+                                const typeConfig = getFileTypeConfig(pendingUploadFile.type || '', pendingUploadFileName || pendingUploadFile.name);
+                                return (
+                                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border relative ${typeConfig.bgColor} ${typeConfig.borderColor}`}>
+                                    {typeConfig.icon}
+                                    <div className="absolute inset-0 rounded-xl bg-blue-500/10 animate-ping pointer-events-none" />
+                                  </div>
+                                );
+                              })()}
+                              <div className="flex flex-col text-left">
+                                <span className="truncate text-blue-600 dark:text-blue-400 font-extrabold max-w-[180px] sm:max-w-xs" title={pendingUploadFileName || pendingUploadFile.name}>
+                                  {pendingUploadFileName || pendingUploadFile.name}
+                                </span>
+                                <span className="text-[10px] text-blue-550 dark:text-blue-400 font-semibold flex items-center gap-1">
+                                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                  Encrypting & Segment Uploading...
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 font-mono text-blue-600 dark:text-blue-450 text-xs font-bold">
+                            {formatBytes(pendingUploadFile.size)}
+                          </td>
+                          <td className="px-6 py-4 text-slate-500 dark:text-slate-400 hidden md:table-cell max-w-xs truncate italic text-xs">
+                            {pendingUploadFile.type || 'application/octet-stream'}
+                          </td>
+                          <td className="px-6 py-4 hidden sm:table-cell">
+                            <div className="flex flex-wrap gap-1.5 max-w-[200px]">
+                              {pendingFileTags && pendingFileTags.length > 0 ? (
+                                pendingFileTags.map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="text-[9.5px] font-extrabold px-2 py-0.5 rounded-full bg-blue-100/80 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 border border-blue-200/50"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[10px] text-slate-350 dark:text-slate-655 italic font-medium">No tags applied</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-slate-500 dark:text-slate-400 text-xs font-mono">
+                            <div className="w-24 sm:w-28 bg-slate-100 dark:bg-slate-905 rounded-full h-2.5 overflow-hidden border border-slate-200/50 dark:border-slate-800 shadow-3xs relative">
+                              <div 
+                                className="bg-blue-600 h-2.5 rounded-full transition-all duration-305 shadow-xs" 
+                                style={{ width: `${uploadProgress}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-blue-600 dark:text-blue-400 font-bold mt-1 text-right">
+                              {uploadProgress}% Complete
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-right flex items-center justify-end space-x-1.5">
+                            <span className="p-1 px-2.5 py-1 text-[10px] font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 border border-blue-205/40 dark:border-blue-900/30 rounded-md select-none inline-flex items-center gap-1 hover:none">
+                              <Loader2 className="w-3 h-3 animate-spin text-blue-500" />
+                              Uploading...
+                            </span>
+                          </td>
+                        </tr>
+                      )}
 
                       {sortedFiles.map((file) => (
                         <tr 
@@ -2012,7 +2620,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           id={`file-row-${file.id}`}
                           className={`hover:bg-slate-100/70 dark:hover:bg-slate-800/50 transition-colors cursor-pointer group ${selectedFileIds.includes(file.id) ? 'bg-blue-50/15 dark:bg-blue-950/20' : ''}`}
                           onClick={() => setSelectedPreviewFile(file)}
-                          title="Click to preview file details"
+                          onContextMenu={(e) => handleContextMenu(e, file)}
+                          title="Click to preview file details. Right-click for secure quick actions."
                         >
                           <td className="pl-6 pr-2 py-4 w-12" onClick={(e) => e.stopPropagation()}>
                             <input 
@@ -2074,48 +2683,86 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               )}
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-slate-400 text-xs flex items-center space-x-2">
-                            <Clock className="w-3.5 h-3.5 text-slate-300 pointer-events-none" />
-                            <span>
-                              {file.uploadedAt.toLocaleDateString()}{' '}
-                              {file.uploadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
+                          <td className="px-6 py-4 text-slate-500 dark:text-slate-400 text-xs">
+                            {currentFolder === 'Trash' ? (
+                              <div className="flex items-center space-x-1.5">
+                                <Clock className="w-3.5 h-3.5 text-red-400/80 pointer-events-none" />
+                                <span className="font-extrabold text-red-600 dark:text-red-400 font-mono bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 px-2 py-0.5 rounded-md">
+                                  {getDaysRemaining(file.deletedAt)} days remaining
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center space-x-2">
+                                <Clock className="w-3.5 h-3.5 text-slate-300 pointer-events-none" />
+                                <span>
+                                  {(() => {
+                                    const dateObj = file.uploadedAt instanceof Date ? file.uploadedAt : new Date(file.uploadedAt);
+                                    return `${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                                  })()}
+                                </span>
+                              </div>
+                            )}
                           </td>
                           <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end space-x-3">
-                              <button
-                                id={`btn-share-${file.id}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedPreviewFile(file);
-                                }}
-                                className="text-slate-400 hover:text-blue-600 transition-colors p-1 cursor-pointer"
-                                title="Generate temporary secure public read-only link"
-                              >
-                                <Share2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                id={`btn-download-${file.id}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDownloadFile(file);
-                                }}
-                                className="text-slate-400 hover:text-blue-600 transition-colors p-1 cursor-pointer"
-                                title="Download decrypted file"
-                              >
-                                <Download className="w-4 h-4" />
-                              </button>
-                              <button
-                                id={`btn-delete-${file.id}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDelete(file.id, file.name);
-                                }}
-                                className="text-slate-300 hover:text-red-500 transition-colors p-1 cursor-pointer"
-                                title="Delete securely"
-                              >
-                                <Trash2 className="w-4.5 h-4.5" />
-                              </button>
+                            <div className="flex items-center justify-end space-x-3" onClick={(e) => e.stopPropagation()}>
+                              {currentFolder === 'Trash' ? (
+                                <>
+                                  <button
+                                    onClick={() => executeRestore(file.id, file.name)}
+                                    className="text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 p-1.5 rounded-full transition-colors cursor-pointer"
+                                    title="Restore file to active directory"
+                                  >
+                                    <RotateCcw className="w-3.75 h-3.75" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(file.id, file.name)}
+                                    className="text-red-405 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 p-1.5 rounded-full transition-colors cursor-pointer"
+                                    title="Permanently Delete file"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    id={`btn-share-${file.id}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShareModalFile(file);
+                                      setShareModalExpiresMin(15);
+                                      setShareModalGeneratedLink(null);
+                                      setShareModalGenerating(false);
+                                      setShareModalCopySuccess(false);
+                                    }}
+                                    className="text-slate-400 hover:text-blue-655 dark:text-slate-500 dark:hover:text-blue-400 hover:bg-slate-150/10 dark:hover:bg-slate-800 transition-all p-1.5 rounded-lg cursor-pointer"
+                                    title="Generate Secure Shareable Link"
+                                  >
+                                    <Share2 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    id={`btn-download-${file.id}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDownloadFile(file);
+                                    }}
+                                    className="text-slate-400 hover:text-blue-600 transition-colors p-1 cursor-pointer"
+                                    title="Download decrypted file"
+                                  >
+                                    <Download className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    id={`btn-delete-${file.id}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDelete(file.id, file.name);
+                                    }}
+                                    className="text-slate-300 hover:text-red-500 transition-colors p-1 cursor-pointer"
+                                    title="Delete securely"
+                                  >
+                                    <Trash2 className="w-4.5 h-4.5" />
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -3397,17 +4044,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <h3 className="text-base font-extrabold text-slate-950 tracking-tight">
-                  Confirm Secure Disposal
+                  {currentFolder === 'Trash' ? 'Confirm Secure Disposal' : 'Safe Move to Trash'}
                 </h3>
                 
                 <p className="text-xs text-slate-550 font-medium mt-2 leading-relaxed px-1">
-                  Are you absolutely sure you want to permanently shred and purge <span className="font-bold text-slate-800 break-all">"{fileToDelete.name}"</span> from your confidential file vault?
+                  {currentFolder === 'Trash' ? (
+                    <>
+                      Are you absolutely sure you want to permanently shred and purge <span className="font-bold text-slate-800 break-all">{`"${fileToDelete.name}"`}</span>?
+                    </>
+                  ) : (
+                    <>
+                      Do you want to safely move <span className="font-bold text-slate-800 break-all">{`"${fileToDelete.name}"`}</span> to your Secure Trash container?
+                    </>
+                  )}
                 </p>
 
-                <div className="bg-amber-50/70 border border-amber-100 rounded-xl p-3 mt-4 text-left w-full flex items-start space-x-2.5">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-[10px] text-amber-800 font-medium leading-relaxed">
-                    This operation is final and irreversible. Our zero-trust server will immediately wipe the encrypted payload records from MongoDB Atlas.
+                <div className={`${currentFolder === 'Trash' ? 'bg-amber-50/70 border-amber-100 text-amber-800' : 'bg-blue-50/70 border-blue-105 text-blue-800'} border rounded-xl p-3 mt-4 text-left w-full flex items-start space-x-2.5`}>
+                  <Info className={`w-4 h-4 ${currentFolder === 'Trash' ? 'text-amber-600' : 'text-blue-600'} shrink-0 mt-0.5`} />
+                  <p className="text-[10px] font-semibold leading-relaxed">
+                    {currentFolder === 'Trash' ? (
+                      'This operation is final and irreversible. Our zero-trust server will immediately wipe the encrypted payload records from MongoDB Atlas.'
+                    ) : (
+                      'The file remains fully encrypted using your secure key and is stored for up to 30 days. You can easily restore it at any point during this period.'
+                    )}
                   </p>
                 </div>
               </div>
@@ -3443,18 +4102,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: 100, x: '-50%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 border border-slate-800 text-slate-100 px-6 py-4 rounded-2xl shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 z-50 w-[92%] sm:w-auto min-w-[540px] hover:border-slate-700 transition-colors"
+            className={`fixed bottom-6 left-1/2 -translate-x-1/2 border text-slate-100 px-6 py-4 rounded-2xl shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 z-50 w-[92%] sm:w-auto min-w-[540px] transition-colors ${
+              currentFolder === 'Trash' 
+                ? 'bg-rose-950/95 border-rose-800 hover:border-rose-700' 
+                : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+            }`}
           >
             <div className="flex items-center space-x-3.5">
-              <div className="w-10 h-10 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-xl flex items-center justify-center shrink-0">
-                <Archive className="w-5 h-5 animate-pulse text-blue-400" />
+              <div className={`w-10 h-10 border rounded-xl flex items-center justify-center shrink-0 ${
+                currentFolder === 'Trash'
+                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                  : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+              }`}>
+                {currentFolder === 'Trash' ? (
+                  <Trash2 className="w-5 h-5 animate-pulse text-rose-450" />
+                ) : (
+                  <Archive className="w-5 h-5 animate-pulse text-blue-400" />
+                )}
               </div>
-              <div className="text-left">
+              <div className="text-left font-sans">
                 <h4 className="text-xs font-black text-white tracking-tight">
-                  {selectedFileIds.length} {selectedFileIds.length === 1 ? 'file' : 'files'} selected
+                  {selectedFileIds.length} {selectedFileIds.length === 1 ? 'file' : 'files'} selected {currentFolder === 'Trash' ? 'in Trash' : ''}
                 </h4>
                 <p className="text-[10px] text-slate-400 font-medium">
-                  Pack into secure ZIP or clean securely from MongoDB vault
+                  {currentFolder === 'Trash' 
+                    ? 'Bulk restore these files back to active vaults or shred them permanently' 
+                    : 'Pack into secure ZIP or clean securely from MongoDB vault'}
                 </p>
               </div>
             </div>
@@ -3470,75 +4143,101 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Cancel
               </button>
 
-              <button
-                type="button"
-                id="btn-bulk-move"
-                onClick={() => {
-                  setSelectedFolderToMove(null);
-                  setCustomMoveFolder('');
-                  setShowBulkMoveModal(true);
-                }}
-                disabled={zipping || deletingBulk}
-                className="relative bg-amber-600 hover:bg-amber-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-amber-900/30 cursor-pointer overflow-hidden group border border-amber-500"
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-white" />
-                <span>Move to Folder</span>
-              </button>
+              {currentFolder === 'Trash' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={executeBulkRestore}
+                    disabled={deletingBulk}
+                    className="relative bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-emerald-990/30 cursor-pointer group border border-emerald-500"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-white" />
+                    <span>Restore Selected</span>
+                  </button>
 
-              <button
-                type="button"
-                id="btn-bulk-rename"
-                onClick={() => setShowBulkRenameModal(true)}
-                disabled={zipping || deletingBulk}
-                className="relative bg-teal-600 hover:bg-teal-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-teal-900/30 cursor-pointer overflow-hidden group border border-teal-500"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-white" />
-                <span>Batch Rename</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteConfirm(true)}
+                    disabled={deletingBulk}
+                    className="relative bg-red-600 hover:bg-red-750 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-red-900/15 cursor-pointer group border border-red-500"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-white animate-bounce-subtle" />
+                    <span>Permanently Delete Selected</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    id="btn-bulk-move"
+                    onClick={() => {
+                      setSelectedFolderToMove(null);
+                      setCustomMoveFolder('');
+                      setShowBulkMoveModal(true);
+                    }}
+                    disabled={zipping || deletingBulk}
+                    className="relative bg-amber-600 hover:bg-amber-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-amber-900/30 cursor-pointer overflow-hidden group border border-amber-500"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-white" />
+                    <span>Move to Folder</span>
+                  </button>
 
-              <button
-                type="button"
-                id="btn-bulk-delete"
-                onClick={() => setBulkDeleteConfirm(true)}
-                disabled={zipping || deletingBulk}
-                className="relative bg-red-600 hover:bg-red-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-red-900/10 cursor-pointer group border border-red-500"
-              >
-                {deletingBulk ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
-                    <span>Purging files...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5 text-white" />
-                    <span>Delete Selected</span>
-                  </>
-                )}
-              </button>
+                  <button
+                    type="button"
+                    id="btn-bulk-rename"
+                    onClick={() => setShowBulkRenameModal(true)}
+                    disabled={zipping || deletingBulk}
+                    className="relative bg-teal-600 hover:bg-teal-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-teal-900/30 cursor-pointer overflow-hidden group border border-teal-500"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-white" />
+                    <span>Batch Rename</span>
+                  </button>
 
-              <button
-                type="button"
-                id="btn-bulk-zip-download"
-                onClick={handleDownloadZip}
-                disabled={zipping || deletingBulk}
-                className="relative bg-blue-600 hover:bg-blue-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-blue-900/30 cursor-pointer overflow-hidden group border border-blue-500"
-              >
-                {zipping ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
-                    <span>Compressing {zipProgress > 0 ? `(${zipProgress}%)` : ''}...</span>
-                    <div 
-                      className="absolute inset-y-0 left-0 bg-blue-500 opacity-15 transition-all duration-350 pointer-events-none" 
-                      style={{ width: `${zipProgress}%` }}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-3.5 h-3.5 group-hover:translate-y-0.5 transition-transform text-white" />
-                    <span>Download ZIP</span>
-                  </>
-                )}
-              </button>
+                  <button
+                    type="button"
+                    id="btn-bulk-delete"
+                    onClick={() => setBulkDeleteConfirm(true)}
+                    disabled={zipping || deletingBulk}
+                    className="relative bg-red-600 hover:bg-red-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-red-900/10 cursor-pointer group border border-red-500"
+                  >
+                    {deletingBulk ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                        <span>Purging files...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5 text-white" />
+                        <span>Delete Selected</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    id="btn-bulk-zip-download"
+                    onClick={handleDownloadZip}
+                    disabled={zipping || deletingBulk}
+                    className="relative bg-blue-600 hover:bg-blue-700 disabled:bg-slate-800 disabled:text-slate-500 text-white font-extrabold text-[11px] px-4 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-lg shadow-blue-900/30 cursor-pointer overflow-hidden group border border-blue-500"
+                  >
+                    {zipping ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                        <span>Compressing {zipProgress > 0 ? `(${zipProgress}%)` : ''}...</span>
+                        <div 
+                          className="absolute inset-y-0 left-0 bg-blue-500 opacity-15 transition-all duration-350 pointer-events-none" 
+                          style={{ width: `${zipProgress}%` }}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-3.5 h-3.5 group-hover:translate-y-0.5 transition-transform text-white" />
+                        <span>Download ZIP</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
           </motion.div>
         )}
@@ -3568,17 +4267,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <h3 className="text-base font-extrabold text-slate-950 tracking-tight">
-                  Disposal of {selectedFileIds.length} Selected Files
+                  {currentFolder === 'Trash' ? `Dispose of ${selectedFileIds.length} Selected Files` : `Move ${selectedFileIds.length} Files to Trash`}
                 </h3>
                 
                 <p className="text-xs text-slate-550 font-medium mt-2 leading-relaxed px-1">
-                  Are you absolutely sure you want to permanently shred and purge <span className="font-extrabold text-red-600">{selectedFileIds.length} select files</span> from your secure file vault?
+                  {currentFolder === 'Trash' ? (
+                    <>
+                      Are you absolutely sure you want to permanently shred and purge <span className="font-extrabold text-red-650">{selectedFileIds.length} selected files</span>?
+                    </>
+                  ) : (
+                    <>
+                      Are you sure you want to safely move <span className="font-extrabold text-blue-650">{selectedFileIds.length} selected files</span> to the Secure Trash container?
+                    </>
+                  )}
                 </p>
 
-                <div className="bg-amber-50/70 border border-amber-100 rounded-xl p-3 mt-4 text-left w-full flex items-start space-x-2.5">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-[10px] text-amber-800 font-medium leading-relaxed">
-                    This collective payload disposal is final. Our server will immediately wipe these records and their content entries from MongoDB Atlas permanently.
+                <div className={`${currentFolder === 'Trash' ? 'bg-amber-50/70 border-amber-100 text-amber-800' : 'bg-blue-50/70 border-blue-105 text-blue-800'} border rounded-xl p-3 mt-4 text-left w-full flex items-start space-x-2.5`}>
+                  <Info className={`w-4 h-4 ${currentFolder === 'Trash' ? 'text-amber-600' : 'text-blue-600'} shrink-0 mt-0.5`} />
+                  <p className="text-[10px] font-semibold leading-relaxed">
+                    {currentFolder === 'Trash' ? (
+                      'This collective payload disposal is final and irreversible. Our zero-trust server will immediately wipe these records and context permanently.'
+                    ) : (
+                      'These files remain fully encrypted and are stored safely in Trash for up to 30 days. You can easily bulk restore them of your choice.'
+                    )}
                   </p>
                 </div>
               </div>
@@ -3590,7 +4301,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   onClick={() => setBulkDeleteConfirm(false)}
                   className="w-full py-2.5 px-4 rounded-xl bg-slate-150 hover:bg-slate-200 text-slate-700 font-bold text-xs transition border border-slate-200 cursor-pointer"
                 >
-                  Keep Payloads
+                  {currentFolder === 'Trash' ? 'Keep Payloads' : 'Keep Active'}
                 </button>
                 <button
                   id="btn-confirm-bulk-delete-execute"
@@ -3598,7 +4309,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   className="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-md shadow-red-100 transition border border-red-700 cursor-pointer flex items-center justify-center space-x-1.5"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Purge All</span>
+                  <span>{currentFolder === 'Trash' ? 'Purge Permanently' : 'Trash Selected'}</span>
                 </button>
               </div>
             </motion.div>
@@ -3918,29 +4629,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className="text-[10px] opacity-70">/</span>
                   </button>
 
-                  {Array.from(new Set(files.map(f => f.folder).filter(Boolean))).sort().map((folderPath: any) => (
-                    <button
-                      key={folderPath}
-                      type="button"
-                      onClick={() => {
-                        setSelectedFolderToMove(folderPath);
-                        setCustomMoveFolder(folderPath);
-                      }}
-                      className={`w-full flex items-center justify-between p-2.5 rounded-lg text-xs font-bold transition text-left ${
-                        selectedFolderToMove === folderPath
-                          ? 'bg-amber-600 text-white shadow-xs border border-amber-650'
-                          : 'bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 border border-slate-150 dark:border-slate-800'
-                      }`}
-                    >
-                      <span className="flex items-center space-x-2 truncate">
-                        <Folder className="w-4 h-4 shrink-0 text-amber-500 fill-amber-500/10" />
-                        <span className="truncate">{folderPath}</span>
-                      </span>
-                      <span className="text-[10px] opacity-70">
-                        {files.filter(f => f.folder === folderPath).length} {files.filter(f => f.folder === folderPath).length === 1 ? 'file' : 'files'}
-                      </span>
-                    </button>
-                  ))}
+                  {Array.from(new Set(files.map(f => f.folder).filter(Boolean))).sort().map((folderPath: any) => {
+                    const nameSegment = folderPath.split('/').pop() || folderPath;
+                    const folderFileCount = files.filter(f => !f.isDeleted && f.folder === folderPath).length;
+                    const isSelected = selectedFolderToMove === folderPath;
+                    const hasFiles = folderFileCount > 0;
+                    const { IconComponent, containerClass, iconClass, label: folderLabel } = getFolderIconAndStyles(nameSegment, isSelected, hasFiles);
+                    return (
+                      <button
+                        key={folderPath}
+                        type="button"
+                        onClick={() => {
+                          setSelectedFolderToMove(folderPath);
+                          setCustomMoveFolder(folderPath);
+                        }}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-lg text-xs font-bold transition text-left ${
+                          isSelected
+                            ? 'bg-amber-600 text-white shadow-xs border border-amber-655'
+                            : 'bg-white dark:bg-slate-950 text-slate-705 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 border border-slate-150 dark:border-slate-800'
+                        }`}
+                      >
+                        <span className="flex items-center space-x-2.5 truncate">
+                          <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 border transition-all duration-300 ${
+                            isSelected 
+                              ? 'bg-white/20 border-white/30 text-white shadow-3xs' 
+                              : containerClass
+                          }`}>
+                            <IconComponent className={`w-3.5 h-3.5 ${isSelected ? 'text-white' : iconClass}`} />
+                          </div>
+                          <div className="flex flex-col truncate text-left">
+                            <span className="truncate">{folderPath}</span>
+                            <span className={`text-[9px] font-medium transition-colors ${isSelected ? 'text-amber-100' : 'text-slate-400 dark:text-slate-500'}`}>
+                              {folderLabel}
+                            </span>
+                          </div>
+                        </span>
+                        <span className="text-[10px] opacity-70">
+                          {folderFileCount} {folderFileCount === 1 ? 'file' : 'files'}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -4209,6 +4938,391 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </button>
               </div>
 
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Create New Folder Custom Modal */}
+      <AnimatePresence>
+        {showCreateFolderModal && (
+          <div 
+            id="create-folder-modal-overlay"
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+            onClick={() => setShowCreateFolderModal(false)}
+          >
+            <motion.div
+              id="create-folder-modal-content"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.35 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-md overflow-hidden p-6 relative font-sans text-slate-800 dark:text-slate-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal header details */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900 rounded-xl flex items-center justify-center shrink-0">
+                    <FolderPlus className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
+                      Create New Folder
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-550 font-medium">
+                      Establish a new secure sub-chamber
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateFolderModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-850 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Form Area */}
+              <form onSubmit={handleCreateFolder} className="mt-5 space-y-4 text-left">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2 font-mono">
+                    Folder Location
+                  </label>
+                  <div className="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-150 dark:border-slate-850 text-slate-550 dark:text-slate-400 text-xs font-semibold select-none">
+                    <Folder className="w-4 h-4 text-slate-400" />
+                    <span className="truncate">
+                      {currentFolder ? `Root / ${currentFolder}` : 'Vault Root (Home)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="input-folder-name" className="block text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2 font-mono">
+                    Folder Name
+                  </label>
+                  <input
+                    autoFocus
+                    id="input-folder-name"
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => {
+                      setNewFolderName(e.target.value);
+                      if (folderCreationError) setFolderCreationError(null);
+                    }}
+                    placeholder="e.g., Financials, Confidential Docs, Receipts..."
+                    className="block w-full px-3.5 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500 text-xs transition font-medium"
+                    maxLength={50}
+                  />
+                  {folderCreationError && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-rose-500 dark:text-rose-400 text-[11px] font-semibold mt-2 leading-tight flex items-start space-x-1.5"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>{folderCreationError}</span>
+                    </motion.div>
+                  )}
+                </div>
+
+                {/* Footer Controls action bar */}
+                <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end space-x-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateFolderModal(false)}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 transition text-xs font-bold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    id="btn-confirm-create-folder"
+                    className="px-4.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition flex items-center space-x-1.5 shadow-md shadow-blue-100 dark:shadow-none cursor-pointer duration-100"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create Folder</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Right-Click Context Menu */}
+      <AnimatePresence>
+        {contextMenu && contextMenu.visible && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.12 }}
+            style={{ 
+              position: 'fixed', 
+              top: `${contextMenu.y}px`, 
+              left: `${contextMenu.x}px`,
+              zIndex: 99999
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            className="w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 shadow-2xl font-sans"
+          >
+            {/* Context Item Header / Info */}
+            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800/85 mb-1 max-w-full text-left">
+              <span className="block text-[9px] uppercase font-mono tracking-widest font-black text-slate-400 dark:text-slate-500">
+                Secure File Actions
+              </span>
+              <span className="block text-[11px] font-bold text-slate-750 dark:text-slate-300 truncate mt-0.5" title={contextMenu.file.name}>
+                {contextMenu.file.name}
+              </span>
+            </div>
+
+            {/* Generate Shareable Link Option */}
+            <button
+              type="button"
+              id="context-menu-btn-share"
+              onClick={() => {
+                setShareModalFile(contextMenu.file);
+                setShareModalExpiresMin(15);
+                setShareModalGeneratedLink(null);
+                setShareModalGenerating(false);
+                setShareModalCopySuccess(false);
+                setContextMenu(null);
+              }}
+              className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-bold font-sans text-slate-700 dark:text-slate-300 hover:bg-linear-to-r hover:from-blue-50 hover:to-blue-100/30 hover:text-blue-700 dark:hover:from-blue-950/20 dark:hover:to-blue-950/40 dark:hover:text-blue-400 rounded-xl transition-all cursor-pointer text-left"
+            >
+              <Share2 className="w-3.75 h-3.75 text-blue-500" />
+              <span>Generate Shareable Link</span>
+            </button>
+
+            {/* View Details Option */}
+            <button
+              type="button"
+              id="context-menu-btn-preview"
+              onClick={() => {
+                setSelectedPreviewFile(contextMenu.file);
+                setContextMenu(null);
+              }}
+              className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-bold font-sans text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-xl transition-all cursor-pointer text-left"
+            >
+              <Eye className="w-3.75 h-3.75 text-slate-400" />
+              <span>View Access Log & Details</span>
+            </button>
+
+            {/* Download Decrypted Option */}
+            <button
+              type="button"
+              id="context-menu-btn-download"
+              onClick={() => {
+                handleDownloadFile(contextMenu.file);
+                setContextMenu(null);
+              }}
+              className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-bold font-sans text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-xl transition-all cursor-pointer text-left"
+            >
+              <Download className="w-3.75 h-3.75 text-slate-400" />
+              <span>Download File</span>
+            </button>
+
+            {/* Delete Option (Unless already in trash) */}
+            {currentFolder !== 'Trash' && (
+              <button
+                type="button"
+                id="context-menu-btn-delete"
+                onClick={() => {
+                  handleDelete(contextMenu.file.id, contextMenu.file.name);
+                  setContextMenu(null);
+                }}
+                className="w-full flex items-center space-x-2.5 px-3 py-2 text-xs font-bold font-sans text-red-600 dark:text-red-400 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/25 rounded-xl transition-all cursor-pointer text-left border-t border-slate-100/65 dark:border-slate-800/65 mt-1"
+              >
+                <Trash2 className="w-3.75 h-3.75 text-red-500" />
+                <span>Delete Securely</span>
+              </button>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Dedicated Share Modal overlay and contents */}
+      <AnimatePresence>
+        {shareModalFile && (
+          <div
+            id="share-dialog-modal-overlay"
+            className="fixed inset-0 z-[10010] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+            onClick={() => setShareModalFile(null)}
+          >
+            <motion.div
+              id="share-dialog-modal-content"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.35 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-205 dark:border-slate-800 shadow-2xl w-full max-w-md overflow-hidden p-6 relative font-sans text-slate-800 dark:text-slate-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center space-x-3 text-left">
+                  <div className="w-10 h-10 bg-linear-to-br from-blue-500/10 to-blue-600/10 dark:from-blue-500/20 dark:to-blue-650/20 text-blue-600 dark:text-blue-450 border border-blue-105 dark:border-blue-900 rounded-xl flex items-center justify-center shrink-0">
+                    <Share2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
+                      Generate Shareable Link
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                      Create a temporary, secure, read-only public access URL.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="share-dialog-close-btn"
+                  onClick={() => setShareModalFile(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-850 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Secure File Info Area */}
+              <div className="mt-5 space-y-4 text-left">
+                <div className="bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-100 dark:border-slate-850 flex items-center space-x-3.5">
+                  {(() => {
+                    const typeConfig = getFileTypeConfig(shareModalFile.type, shareModalFile.name);
+                    return (
+                      <div className={`w-9.5 h-9.5 rounded-lg flex items-center justify-center shrink-0 border transition-all ${typeConfig.bgColor} ${typeConfig.borderColor}`}>
+                        {typeConfig.icon}
+                      </div>
+                    );
+                  })()}
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="text-xs font-bold text-slate-750 dark:text-slate-250 truncate" title={shareModalFile.name}>
+                      {shareModalFile.name}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Size: <b>{formatBytes(shareModalFile.size)}</b>
+                    </span>
+                  </div>
+                </div>
+
+                {!shareModalGeneratedLink ? (
+                  <div className="space-y-4">
+                    {/* Expiration Configuration Option */}
+                    <div className="space-y-2">
+                      <label className="block text-[10px] uppercase font-mono font-black tracking-wider text-slate-450 dark:text-slate-500">
+                        Expiration horizon:
+                      </label>
+                      <div className="grid grid-cols-4 gap-2">
+                        {[
+                          { label: '15m', val: 15 },
+                          { label: '1h', val: 60 },
+                          { label: '24h', val: 1440 },
+                          { label: '7d', val: 10080 },
+                        ].map((preset) => (
+                          <button
+                            key={`modal-preset-${preset.label}`}
+                            type="button"
+                            onClick={() => setShareModalExpiresMin(preset.val)}
+                            className={`text-[10px] py-2 rounded-xl font-bold transition border cursor-pointer ${
+                              shareModalExpiresMin === preset.val
+                                ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                                : 'bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-900 border-slate-200 dark:border-slate-805 text-slate-600 dark:text-slate-350'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
+                        The secure credential record dynamically drops from the Atlas index when this period lapses.
+                      </p>
+                    </div>
+
+                    {/* Action Button */}
+                    <button
+                      type="button"
+                      id="share-dialog-generate-btn"
+                      onClick={handleGenerateShareModalLink}
+                      disabled={shareModalGenerating}
+                      className="w-full py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-450 text-white font-extrabold text-xs transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-blue-500/10 dark:shadow-none"
+                    >
+                      {shareModalGenerating ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>Securing Direct Gateway...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Link className="w-4 h-4 text-white" />
+                          <span>Generate Link URL</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5 bg-sky-50/50 dark:bg-sky-950/15 border border-sky-100 dark:border-sky-900/30 rounded-2xl p-4 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-sky-700 dark:text-sky-450">
+                        Link Ready For Access:
+                      </span>
+                      <span className="text-[9.5px] text-sky-700 bg-sky-100 border border-sky-200/50 dark:text-sky-305 dark:bg-sky-900/40 rounded px-2 py-0.5 font-mono font-black">
+                        Expires in {shareModalExpiresMin >= 1440 ? `${Math.round(shareModalExpiresMin / 1440)}d` : shareModalExpiresMin >= 60 ? `${Math.round(shareModalExpiresMin / 60)}h` : `${shareModalExpiresMin}m`}
+                      </span>
+                    </div>
+
+                    <div className="flex space-x-2 mt-1">
+                      <input
+                        type="text"
+                        readOnly
+                        value={shareModalGeneratedLink}
+                        className="bg-white dark:bg-slate-950 border border-sky-200 dark:border-sky-900 rounded-xl px-3 py-2 text-[10.5px] font-mono text-sky-800 dark:text-sky-350 break-all select-all flex-1 min-w-0 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        id="share-dialog-copy-btn"
+                        onClick={() => {
+                          navigator.clipboard.writeText(shareModalGeneratedLink);
+                          setShareModalCopySuccess(true);
+                          setTimeout(() => setShareModalCopySuccess(false), 2000);
+                        }}
+                        className="p-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md cursor-pointer shrink-0 transition flex items-center justify-center font-bold"
+                        title="Copy link to clipboard"
+                      >
+                        {shareModalCopySuccess ? (
+                          <CheckCircle className="w-3.5 h-3.5 text-white" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-white" />
+                        )}
+                      </button>
+                    </div>
+
+                    {shareModalCopySuccess && (
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold flex items-center space-x-1 animate-fadeIn">
+                        <span>✓ Link copied to clipboard! Share it with the recipient securely.</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Close Button at bottom in any state */}
+              <div className="mt-5 pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  id="share-dialog-done-btn"
+                  onClick={() => setShareModalFile(null)}
+                  className="px-4.5 py-2.5 rounded-xl border border-slate-205 dark:border-slate-800 bg-white dark:bg-slate-850 text-slate-505 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition text-xs font-bold cursor-pointer"
+                >
+                  Done
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

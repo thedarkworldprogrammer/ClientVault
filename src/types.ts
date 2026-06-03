@@ -20,6 +20,8 @@ export interface ClientFile {
   content: string; // Base64 data url
   tags?: string[];
   folder?: string | null;
+  isDeleted?: boolean;
+  deletedAt?: string | null;
 }
 
 export interface ActivityLog {
